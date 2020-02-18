@@ -29,10 +29,20 @@ def get_spatial_correlation(x, y, W):
     Rc = np.matmul(np.matmul(x_norm.transpose(), W), y_norm)
     return Rc
 
+def makeScree():
+    ev, v = fa.get_eigenvalues()
+    plt.scatter(range(1, df.shape[1] + 1), ev)
+    plt.plot(range(1, df.shape[1] + 1), ev)
+    plt.title('Scree Plot')
+    plt.xlabel('Factors')
+    plt.ylabel('Eigenvalue')
+    plt.grid()
+    plt.show()
 
 # read the cad file
 os.chdir(r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt")
-cadFile = r"2020_01_24_DRAFT_West_Wall_mkr.dxf"
+#cadFile = r"2020_01_24_DRAFT_West_Wall_mkr.dxf"
+cadFile = r"2020-02-06 - DRAFT South Wall.dxf"
 doc = ezdxf.readfile(cadFile)
 
 # record all entities in modelspace
@@ -88,24 +98,42 @@ for i, point in tqdm(enumerate(pointList), total=len(pointList)):
         d = mp.distance(point)
         distMat[i, j] = d
 
-thresh = 100.
-truthMat = distMat < thresh
+# truthMat = np.exp(-distMat**2/1e5)
+# newLayers = layers
+# nDistMat = distMat
 
-plt.scatter(xRand, yRand, s=1, c=truthMat[:, 25], vmin=0, vmax=1)
+#list layers i want
+newLayers = ['C-SPALL', 'C-JOIN','W-MRTR', 'C-REPR', 'C-STON', 'E-METL', 'E-VEGT', 'W-STON', 'W-SURF']
+nDistMat = np.ones([num_samples,len(newLayers)])*np.inf
+
+for i,entry in enumerate(newLayers):
+    these_layers = []
+    for j,layer in enumerate(layers):
+        if entry in layer:
+            these_layers.append(j)
+    if len(these_layers) > 0:
+        nDistMat[:,i] = np.min(distMat[:,these_layers], axis=1)
+
+truthMat = np.exp(-nDistMat**2/1e5)
+
+plt.scatter(xRand, yRand, s=1, c=truthMat[:, 2], vmin=0, vmax=1)
 plt.show()
 
 # regular fa
 fa = FactorAnalyzer()
-numFactors = 6
-df = pd.DataFrame(truthMat, columns=layers)
-unnecessaryColumns = [layers[x] for x in [0, 1, 2, 3, 9]]
+numFactors = 5
+#df = pd.DataFrame(truthMat, columns=layers)
+#unnecessaryColumns = [layers[x] for x in [0, 1, 2, 3, 9]]
+df = pd.DataFrame(truthMat, columns=newLayers)
+unnecessaryColumns = [x for i, x in enumerate(newLayers) if np.max(nDistMat[:, i]) == np.Inf]
 df.drop(unnecessaryColumns, axis=1, inplace=True)
 df.dropna(inplace=True)
 fa.analyze(df, numFactors, rotation=None)
 L = np.array(fa.loadings)
 headings = list(fa.loadings.transpose().keys())
-factor_threshold = 0.25
+factor_threshold = 0.3
 for i, factor in enumerate(L.transpose()):
     descending = np.argsort(np.abs(factor))[::-1]
     contributions = [(np.round(factor[x], 2), headings[x]) for x in descending if np.abs(factor[x]) > factor_threshold]
     print('Factor %d:' % (i + 1), contributions)
+
