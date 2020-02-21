@@ -2,6 +2,7 @@
 # in terminal pip install ezdxf==0.6.2
 import ezdxf
 import os
+import math
 import numpy as np
 from tqdm import tqdm
 from shapely.geometry import Point
@@ -153,7 +154,7 @@ plt.show()
 
 # regular fa
 fa = FactorAnalyzer()
-numFactors = 6
+numFactors = 4
 # df = pd.DataFrame(truthMat, columns=layers)
 # unnecessaryColumns = [layers[x] for x in [0, 1, 2, 3, 9]]
 df = pd.DataFrame(truthMat, columns=newLayers)
@@ -163,16 +164,19 @@ df.dropna(inplace=True)
 fa.analyze(df, numFactors, rotation=None)
 L = np.array(fa.loadings)
 headings = list(fa.loadings.transpose().keys())
-factor_threshold = 0.5
+factor_threshold = 0.4
+factors = []
 for i, factor in enumerate(L.transpose()):
     descending = np.argsort(np.abs(factor))[::-1]
     contributions = [(np.round(factor[x], 2), headings[x]) for x in descending if np.abs(factor[x]) > factor_threshold]
+    factors.append(contributions)
     print('Factor %d:' % (i + 1), contributions)
 
-factor_list = ['W-MRTR-OPEN', 'W-SURF-STAIN-T1']
-for entry in factor_list:
-    index = [i for i, s in enumerate(newLayers) if entry in s]
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.scatter(xRand, yRand, s=1, c=truthMat[:, index[0]], vmin=0, vmax=1)
-    ax.set_title(entry)
+factor_list = []
+for i, factor in enumerate(factors):
+    factor_list.append([])
+    for j, condition in enumerate(factor):
+        factor_list[i].append(condition[1])
+
+
+
