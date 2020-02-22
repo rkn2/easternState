@@ -180,3 +180,11 @@ for i, factor in enumerate(factors):
 
 
 
+for m, entry in enumerate(factor_list):
+    n = int(math.ceil(len(entry) / 3))
+    fig = plt.figure()
+    for k, val in enumerate(entry):
+        index = [i for i, s in enumerate(newLayers) if val in s]
+        ax = fig.add_subplot(n, 3, k+1)
+        ax.scatter(xRand, yRand, s=1, c=truthMat[:, index[0]], vmin=0, vmax=1)
+        ax.set_title(val)
