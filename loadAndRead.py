@@ -92,12 +92,14 @@ def get_data(cadFile, num_samples=1000):  # cadFile is complete path
                 continue
             d = mp.distance(point)
             distMat[i, j] = d
-    return distMat, xRand, yRand, layers
+    dist_dict = {layer:distMat[:,j] for j, layer in enumerate(layers)}
+    return dist_dict, xRand, yRand
 
 
 # TODO instead of distMat, return df in dict or something, each column goes in dict entry
 
-def specific_combine(distMat, layers, newLayers):
+def specific_combine(dist_dict, newLayers):
+    layers = dist_dict.keys()
     for layer in layers:
         for new in newLayers:
             if layer not in newLayers and bool([ele for ele in newLayers if (ele in layer)]) == False:
@@ -106,18 +108,27 @@ def specific_combine(distMat, layers, newLayers):
     newLayers.append('E-METL-T1')
     newLayers.append('E-METL-T4')
 
-    nDistMat = np.ones([distMat.shape[0], len(newLayers)]) * np.inf
+    num_points = None
+    for layer in layers:
+        if num_points is None:
+            num_points = len(dist_dict[layer])
+        else:
+            if len(dist_dict[layer]) != num_points:
+                raise ValueError('All layers must have same number of points!')
+
+    nDistMat = np.ones([num_points, len(newLayers)]) * np.inf
     for i, entry in enumerate(newLayers):
         these_layers = []
         for j, layer in enumerate(layers):
             if entry in layer:
                 if 'E-METL' in layer:
                     if layer[-1] == '2' or '4':
-                        these_layers.append(j)
+                        these_layers.append(layer)
                 else:
-                    these_layers.append(j)
+                    these_layers.append(layer)
         if len(these_layers) > 0:
-            nDistMat[:, i] = np.min(distMat[:, these_layers], axis=1)
+            these_dists = np.vstack([dist_dict[layer] for layer in these_layers]).transpose()
+            nDistMat[:, i] = np.min(these_dists, axis=1)
         # print('the layers are: ' + str(these_layers))
 
     # truthMat = np.exp(-nDistMat ** 2 / 8e4)
@@ -131,14 +142,16 @@ def main():
     #specWall = r"2020_01_24_DRAFT_West_Wall_mkr.dxf"
     specWall = r"2020-01-24 - DRAFT North Wall.dxf"
     cadFile = cadPath + specWall
-    distMat, xRand, yRand, layers = get_data(cadFile, num_samples=10000)
+    dist_dict, xRand, yRand = get_data(cadFile, num_samples=10000)
 
     # to get index of certain layer
     # indices = [i for i, s in enumerate(layers) if 'E-METL-T1' in s]
 
     # specific combine
     newLayers = ['W-MRTR-BCKP', 'W-MRTR-FNSH', 'C-REPR', 'E-METL', 'E-VEGT', 'W-STON-BULG', 'W-STON-RESET']
-    nDistMat, newLayers = specific_combine(distMat, layers, newLayers)
+    nDistMat, newLayers = specific_combine(dist_dict, newLayers)
+
+    # todo: get dist_dict and nDistMat for different walls and use vstack to make a bigger list of values
 
     # to get index of certain layer
     # indices = [i for i, s in enumerate(layers) if 'E-METL-T1' in s]
