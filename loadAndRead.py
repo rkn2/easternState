@@ -31,79 +31,92 @@ def get_spatial_correlation(x, y, W):
     return Rc
 
 
-def makeScree(fa):
-    ev, v = fa.get_eigenvalues()
-    plt.scatter(range(1, df.shape[1] + 1), np.log(ev))
-    plt.plot(range(1, df.shape[1] + 1), np.log(ev))
-    plt.title('Scree Plot')
-    plt.xlabel('Factors')
-    plt.ylabel('Eigenvalue')
-    plt.grid()
-    plt.show()
+# def makeScree(fa):
+#     ev, v = fa.get_eigenvalues()
+#     plt.scatter(range(1, df.shape[1] + 1), np.log(ev))
+#     plt.plot(range(1, df.shape[1] + 1), np.log(ev))
+#     plt.title('Scree Plot')
+#     plt.xlabel('Factors')
+#     plt.ylabel('Eigenvalue')
+#     plt.grid()
+#     plt.show()
 
 
 # when you return a bunch of things, should be class; for now funct
-def get_data(cadFile, num_samples=1000):  # cadFile is complete path
-    doc = ezdxf.readfile(cadFile)
+def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
+    dist_df = None
+    for file in cadFiles:
+        doc = ezdxf.readfile(file)
+        # record all entities in modelspace
+        msp = doc.modelspace()
+        all_objs = [e for e in msp]
+        layers = sorted(set([x.dxf.layer for x in all_objs]))  # set is a list of unique items
 
-    # record all entities in modelspace
-    msp = doc.modelspace()
-    all_objs = [e for e in msp]
-    layers = sorted(set([x.dxf.layer for x in all_objs]))  # set is a list of unique items
+        min_max = np.array([np.Inf * np.ones(2), -np.Inf * np.ones(2)])
+        for x in all_objs:
+            try:
+                p = np.array([y for y in x.get_points()])[:, :2]
+                min_max[0] = np.min([min_max[0], np.min(p, axis=0)], axis=0)
+                min_max[1] = np.max([min_max[1], np.max(p, axis=0)], axis=0)
+            except AttributeError:
+                pass
 
-    min_max = np.array([np.Inf * np.ones(2), -np.Inf * np.ones(2)])
-    for x in all_objs:
-        try:
-            p = np.array([y for y in x.get_points()])[:, :2]
-            min_max[0] = np.min([min_max[0], np.min(p, axis=0)], axis=0)
-            min_max[1] = np.max([min_max[1], np.max(p, axis=0)], axis=0)
-        except AttributeError:
-            pass
+        layerDict = {}
+        # get all the polylines in each layer
+        for lyr in layers:
+            layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
+            polyList = []
+            for x in layer_objs:
+                if 'get_points' not in dir(x):
+                    continue
+                points = np.array([y for y in x.get_points()])[:, :2]
+                points = points.tolist()
+                if len(points) > 2:
+                    poly = Polygon(points)
+                    if poly.is_valid:
+                        polyList.append(poly)
+            mp = unary_union(polyList)
+            if not mp.is_valid:
+                raise RuntimeError
+            layerDict.update({lyr: MultiPolygon(polyList)})
+        # pick random points
+        xRand = np.random.uniform(min_max[0, 0], min_max[1, 0], num_samples)  # rerun for pred
+        yRand = np.random.uniform(min_max[0, 1], min_max[1, 1], num_samples)  # rerun for pred
+        pointList = [Point(xRand[i], yRand[i]) for i in range(num_samples)]  # rerun for pred
 
-    layerDict = {}
-    # get all the polylines in each layer
-    for lyr in layers:
-        layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
-        polyList = []
-        for x in layer_objs:
-            if 'get_points' not in dir(x):
-                continue
-            points = np.array([y for y in x.get_points()])[:, :2]
-            points = points.tolist()
-            if len(points) > 2:
-                poly = Polygon(points)
-                if poly.is_valid:
-                    polyList.append(poly)
-        mp = unary_union(polyList)
-        if not mp.is_valid:
-            raise RuntimeError
-        layerDict.update({lyr: MultiPolygon(polyList)})
-    # pick random points
-    xRand = np.random.uniform(min_max[0, 0], min_max[1, 0], num_samples)  # rerun for pred
-    yRand = np.random.uniform(min_max[0, 1], min_max[1, 1], num_samples)  # rerun for pred
-    pointList = [Point(xRand[i], yRand[i]) for i in range(num_samples)]  # rerun for pred
+        distMat = np.ones([len(xRand), len(layers)], dtype=np.float) * np.Inf
 
-    distMat = np.ones([len(xRand), len(layers)], dtype=np.float) * np.Inf
+        for i, point in tqdm(enumerate(pointList), total=len(pointList)):
+            for j, layer in enumerate(layers):
+                mp = layerDict[layer]
+                if len(mp) == 0:
+                    continue
+                d = mp.distance(point)
+                distMat[i, j] = d
 
-    for i, point in tqdm(enumerate(pointList), total=len(pointList)):
-        for j, layer in enumerate(layers):
-            mp = layerDict[layer]
-            if len(mp) == 0:
-                continue
-            d = mp.distance(point)
-            distMat[i, j] = d
-    dist_dict = {layer:distMat[:,j] for j, layer in enumerate(layers)}
-    return dist_dict, xRand, yRand
+        dist_dict = {layer: distMat[:, j] for j, layer in enumerate(layers)}
+        dist_df_single = pd.DataFrame.from_dict(dist_dict)
+        dist_df_single.insert(0,'x', xRand)
+        dist_df_single.insert(1, 'y', yRand)
+        if dist_df is None:
+            dist_df = dist_df_single
+        else:
+            dist_df = pd.merge(left=dist_df, right=dist_df_single, how='outer')
+
+        # remove NaNs from final dataframe
+        dist_df[np.isnan(dist_df)] = np.Inf
+
+        return dist_df
 
 
 # TODO instead of distMat, return df in dict or something, each column goes in dict entry
 
-def specific_combine(dist_dict, newLayers):
-    layers = dist_dict.keys()
+def specific_combine(dist_df, newLayers):
+    layers = dist_df.columns
     for layer in layers:
-        for new in newLayers:
-            if layer not in newLayers and bool([ele for ele in newLayers if (ele in layer)]) == False:
-                newLayers.append(layer)
+        #for new in newLayers:
+        if layer not in newLayers and bool([ele for ele in newLayers if (ele in layer)]) == False:
+            newLayers.append(layer)
 
     newLayers.append('E-METL-T1')
     newLayers.append('E-METL-T4')
@@ -111,9 +124,9 @@ def specific_combine(dist_dict, newLayers):
     num_points = None
     for layer in layers:
         if num_points is None:
-            num_points = len(dist_dict[layer])
+            num_points = len(dist_df[layer])
         else:
-            if len(dist_dict[layer]) != num_points:
+            if len(dist_df[layer]) != num_points:
                 raise ValueError('All layers must have same number of points!')
 
     nDistMat = np.ones([num_points, len(newLayers)]) * np.inf
@@ -127,7 +140,7 @@ def specific_combine(dist_dict, newLayers):
                 else:
                     these_layers.append(layer)
         if len(these_layers) > 0:
-            these_dists = np.vstack([dist_dict[layer] for layer in these_layers]).transpose()
+            these_dists = np.vstack([dist_df[layer] for layer in these_layers]).transpose()
             nDistMat[:, i] = np.min(these_dists, axis=1)
         # print('the layers are: ' + str(these_layers))
 
@@ -139,42 +152,69 @@ def specific_combine(dist_dict, newLayers):
 def main():
     # read the cad file
     cadPath = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
-    #specWall = r"2020_01_24_DRAFT_West_Wall_mkr.dxf"
-    specWall = r"2020-01-24 - DRAFT North Wall.dxf"
-    cadFile = cadPath + specWall
-    dist_dict, xRand, yRand = get_data(cadFile, num_samples=10000)
+    walls = [r'2020_01_24_DRAFT_West_Wall_mkr.dxf', r'2020-01-24 - DRAFT North Wall.dxf',
+             r'2020-02-06 - DRAFT South Wall.dxf']
+    cadFile = []
+    cadFiles = [cadPath + walls[itup[0]] for itup in enumerate(walls)]
+    dist_df = get_data(cadFiles, num_samples=10000)
 
     # to get index of certain layer
     # indices = [i for i, s in enumerate(layers) if 'E-METL-T1' in s]
 
     # specific combine
     newLayers = ['W-MRTR-BCKP', 'W-MRTR-FNSH', 'C-REPR', 'E-METL', 'E-VEGT', 'W-STON-BULG', 'W-STON-RESET']
-    nDistMat, newLayers = specific_combine(dist_dict, newLayers)
+    nDistMat, newLayers = specific_combine(dist_df, newLayers)
 
-    # todo: get dist_dict and nDistMat for different walls and use vstack to make a bigger list of values
+    xRand = np.array(dist_df['x'])
+    yRand = np.array(dist_df['y'])
+
+    nDistMat[np.isinf(nDistMat)] = 1e12
 
     # to get index of certain layer
     # indices = [i for i, s in enumerate(layers) if 'E-METL-T1' in s]
-    y = nDistMat[:, 4] == 0  # makes it binary
-    metlD = nDistMat[:, [3, 21, 22]]  # rerun for pred
-    # X = np.hstack([xRand.reshape(-1, 1), yRand.reshape(-1, 1), metlD]) #rerun for pred
-    X = np.hstack([yRand.reshape(-1, 1), metlD])  # rerun for pred
+    VEGT_idx = [i for i, layer in enumerate(newLayers) if 'VEGT' in layer]
+    y = nDistMat[:, VEGT_idx] == 0  # makes it binary
+    # metlD = nDistMat[:, [3, 21, 22]]
+    # X = np.hstack([xRand.reshape(-1, 1), yRand.reshape(-1, 1), metlD])
+    disallowed_layers = ['VEGT', 'x']
+    idx = [i for i, layer in enumerate(newLayers) if np.all([y not in layer for y in disallowed_layers])]
+    X = nDistMat[:, idx]
+
+    # set aside some data for testing the model later
+    test_fraction = 0.25
+    test_number = int(test_fraction * X.shape[0])
+    test_idx = np.random.choice(X.shape[0], test_number, replace=False)
+    test_mat = np.zeros(X.shape[0], dtype=np.bool)
+    test_mat[test_idx] = True
+    train_mat = ~test_mat
+
+    # train the random forest
     rf = RandomForestClassifier(n_estimators=500, oob_score=True)
-    rf = rf.fit(X, y)
-    rfO = rf.oob_score_  # if bad (< 0.7), rf cant handle this prediction
-    Z = rf.predict_proba(X)  # rerun for pred
+    rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
+
+    #eval model on test data
+    print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
+    print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
+    print('layer contribution to RF in descending order:')
+    for x in np.argsort(rf.feature_importances_)[::-1]:
+        print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], newLayers[idx[x]]))
+
+    # make predictions and plot them
+    Z = rf.predict_proba(X)  # rerun for pred (since just x, it doesnt use y (veggie))
     fig = plt.figure()
     plt.scatter(xRand, yRand, s=1, c=Z[:, 1], vmin=0, vmax=1)
-    plt.title('Predicted dif wall')
+    plt.title('Predicted wall')
     plt.show()
     # rf.feature_importances_
 
+    # compare to ground truth
     truthMat = nDistMat == 0
     fig = plt.figure()
-    plt.scatter(xRand, yRand, s=1, c=truthMat[:, 4], vmin=0, vmax=1)
-    plt.title('Truth wall')
+    plt.scatter(xRand, yRand, s=1, c=nDistMat[:, 4], vmin=0) #, vmax=1)
+    plt.title('vegt')
     plt.show()
 
+# todo: shift cad files so they all line up
 
 if __name__ == '__main__':
     main()
