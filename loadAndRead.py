@@ -13,7 +13,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 from factor_analyzer import FactorAnalyzer
-
+import seaborn as sns
+from sklearn.base import clone
 from scipy.spatial import distance
 
 
@@ -40,6 +41,7 @@ def points_from_mp(mp, ax=None):
             ax.plot(*r.transpose(), marker='.')
         pts = np.vstack([pts, r])
     return pts
+
 
 # def makeScree(fa):
 #     ev, v = fa.get_eigenvalues()
@@ -69,12 +71,16 @@ class coordinate_handler(object):
         # record the 3d bounding box
         self.bounds = np.array([[np.min(np.vstack(bb_pts)[:, 0]), np.max(np.vstack(bb_pts)[:, 0])],  # x range
                                 self.y_range, self.z_range])
+
     def xform_front(self, p):
         return [p[0], p[1], self.z_range[0]]
+
     def xform_back(self, p):
         return [p[0], self.top_box[1] - p[1] + self.y_range[0], self.z_range[1]]
+
     def xform_top(self, p):
         return [p[0], self.y_range[1], p[1]]
+
     def embed(self, points, allow_inexact=False):
         # points = [p for p in raw_points if self.all_segments.contains(Point(p))]
         # if len(points) < 3:
@@ -188,10 +194,6 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
                 pointList.append(r[0])
         pointList = np.array(pointList)
 
-        # xRand = np.random.uniform(min_max[0, 0], min_max[1, 0], num_samples)  # rerun for pred
-        # yRand = np.random.uniform(min_max[0, 1], min_max[1, 1], num_samples)  # rerun for pred
-        # pointList = [Point(xRand[i], yRand[i]) for i in range(num_samples)]  # rerun for pred
-
         distMat = np.ones([num_samples, len(layers)], dtype=np.float) * np.Inf
 
         for i, r in tqdm(enumerate(pointList), total=len(pointList)):
@@ -273,6 +275,70 @@ def specific_combine(dist_df, newLayers):
 
     return nDistMat, newLayers
 
+def cross_corr(dist_df, num_vars=5):
+    new_dist_df = dist_df[['E-VEGT-GROWIES', 'E-VEGT-BIOGRW', 'y', 'C-CRCK', 'W-SURF-STAIN-T1']]
+    new_dist_df.corr()
+    colormap = plt.cm.RdBu
+    plt.figure(figsize=(15, 10))
+    # plt.title(u'6 hours', y=1.05, size=16)
+
+    mask = np.zeros_like(new_dist_df.corr())
+    mask[np.triu_indices_from(mask)] = True
+
+    svm = sns.heatmap(new_dist_df.corr(), mask=mask, linewidths=0.1, vmax=1.0,
+                      square=True, cmap=colormap, linecolor='white', annot=True)
+
+def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_state=42):
+
+    # clone the model to have the exact same specification as the one initially trained
+    model_clone = clone(model)
+    # set random_state for comparability
+    model_clone.random_state = random_state
+    # training and scoring the benchmark model
+    model_clone.fit(X_train, y_train)
+    benchmark_score = model_clone.score(X_train, y_train)
+    # list for storing feature importances
+    importances = []
+
+    nDistMat_df = pd.DataFrame(data=X_train, columns=newLayers +['random'])
+    X_train_df = pd.DataFrame(data=X_train, columns=newLayers+['random'])
+
+    # file1 = open(r"test.txt", "w+")
+    # text = []
+    # iterating over all columns and storing feature importance (difference between benchmark and new model)
+    for col in X_train_df.columns:
+        model_clone = clone(model)
+        model_clone.random_state = random_state
+        model_clone.fit(X_train_df.drop(col, axis=1), y_train)
+        drop_col_score = model_clone.score(X_train_df.drop(col, axis=1), y_train)
+        importances.append(benchmark_score - drop_col_score)
+        # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
+    importances_df =pd.DataFrame(importances, X_train_df.columns)
+    ax = importances_df.plot.barh(rot=0,figsize=(12, 10))
+    fig = ax.get_figure()
+    plt.show(block=False)
+    plt.close(fig)
+    file_name = str(certainLayer) + '.pdf'
+    ax.figure.savefig(file_name)
+
+    # file1.write(text)
+    # file1.close()
+    return importances_df
+
+def pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer):
+    # Z = rf.predict(X)
+    Z = rf.predict_proba(X)[:, 1]  # rerun for pred (since just x, it doesnt use y (veggie))
+    fig = plt.figure(figsize=(10, 6))
+    ax = [None, None]
+    ax[0] = fig.add_subplot(211, projection='3d')
+    ax[0].scatter(xRand, yRand, zRand, s=20, c=Z, vmin=0, vmax=1)
+    ax[0].set_title('Predicted wall for ' + certainLayer)
+    # compare to ground truth
+    ax[1] = fig.add_subplot(212, projection='3d')
+    ax[1].scatter(xRand, yRand, zRand, s=20, c=y, vmin=0)  # , vmax=1)
+    ax[1].set_title('Ground truth for ' + certainLayer)
+    file_name = str(certainLayer) + '_PredVsGround.pdf'
+    fig.savefig(file_name)
 
 def main():
     # read the cad file
@@ -280,93 +346,62 @@ def main():
     walls = [r'2020 02 06 - DRAFT West Wall mkr-et v02_BN.dxf', r'2020-01-24 - DRAFT North Wall_BN.dxf',
              r'2020-02-06 - DRAFT South Wall_BN.dxf']
     cadFiles = [cadPath + walls[itup[0]] for itup in enumerate(walls)]
-    dist_df = get_data(cadFiles, num_samples=1000)
+    dist_df = get_data(cadFiles, num_samples=100000)
+    layers = dist_df.columns
 
-    # to get index of certain layer
-    # indices = [i for i, s in enumerate(layers) if 'E-METL-T1' in s]
+    for layer1 in tqdm(layers, total=len(layers)):
+        # to get index of certain layer
+        certainLayer = layer1
+        prohibited_layers = ['0', certainLayer]
+        layer_order = sorted(dist_df.keys())
+        nDistMat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
+        # newLayers = layers
+        newLayers = [k for k in layer_order if k not in prohibited_layers]
 
-    # # specific combine
-    # newLayers = ['W-MRTR-BCKP', 'W-MRTR-FNSH', 'C-REPR', 'E-METL', 'E-VEGT', 'W-STON-BULG', 'W-STON-RESET']
-    # nDistMat, newLayers = specific_combine(dist_df, newLayers)
-    #
-    # to get index of certain layer
-    certainLayer = 'E-VEGT-BIOGRW'
-    prohibited_layers = ['0', certainLayer, 'E-VEGT-GROWIES']
-    layer_order = sorted(dist_df.keys())
-    nDistMat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
-    # layers = dist_df.columns
-    # newLayers = layers
-    newLayers = [k for k in layer_order if k not in prohibited_layers]
+        rand_column = np.random.randint(2, size=nDistMat.shape[1])
+        nDistMat = np.vstack([nDistMat, rand_column])
 
-    X = nDistMat.transpose()
-    y = dist_df[certainLayer].values == 0
+        X = nDistMat.transpose()
+        y = dist_df[certainLayer].values == 0
 
-    # # transform to (0, 1)
-    # nDistMat = np.exp(-nDistMat/1e3)
+        # # transform to (0, 1)
+        # nDistMat = np.exp(-nDistMat/1e3)
 
-    xRand = np.array(dist_df['x'])
-    yRand = np.array(dist_df['y'])
-    zRand = np.array(dist_df['z'])
+        xRand = np.array(dist_df['x'])
+        yRand = np.array(dist_df['y'])
+        zRand = np.array(dist_df['z'])
+        X[np.isinf(X)] = 1e12
 
-    nDistMat[np.isinf(nDistMat)] = 1e12
+        # set aside some data for testing the model later
+        test_fraction = 0.25
+        test_number = int(test_fraction * X.shape[0])
+        test_idx = np.random.choice(X.shape[0], test_number, replace=False)
+        test_mat = np.zeros(X.shape[0], dtype=np.bool)
+        test_mat[test_idx] = True
+        train_mat = ~test_mat
 
-    # indices = [i for i, s in enumerate(layers) if 'E-METL-T1' in s]
+        if np.sum(y[train_mat]) == 0 or np.sum(~y[train_mat]) == 0:
+            continue
 
-    # interest_idx = [i for i, layer in enumerate(newLayers) if certainLayer in layer]
-    # y = nDistMat[:, interest_idx] == 0  # makes it binary
-    # # metlD = nDistMat[:, [3, 21, 22]]
-    # # X = np.hstack([xRand.reshape(-1, 1), yRand.reshape(-1, 1), metlD])
-    # disallowed_layers = [certainLayer, 'x']
-    # idx = [i for i, layer in enumerate(newLayers) if np.all([y not in layer for y in disallowed_layers])]
-    # X = nDistMat[:, idx]
+        # train the random forest
+        rf = RandomForestClassifier(n_estimators=100, max_depth=5, oob_score=True)  # n_estimators=500, WANT LOWER NUMBER --> MORE GENERIC
+        rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
 
-    # set aside some data for testing the model later
-    test_fraction = 0.25
-    test_number = int(test_fraction * X.shape[0])
-    test_idx = np.random.choice(X.shape[0], test_number, replace=False)
-    test_mat = np.zeros(X.shape[0], dtype=np.bool)
-    test_mat[test_idx] = True
-    train_mat = ~test_mat
+        # eval model on test data
+        # print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
+        # print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
+        # print('layer contribution to RF in descending order:')
+        # for x in np.argsort(rf.feature_importances_)[::-1]:
+        #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], newLayers[idx[x]]))
+        #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], newLayers[x]))
 
-    # train the random forest
-    rf = RandomForestClassifier(oob_score=True) #n_estimators=500, WANT LOWER NUMBER --> MORE GENERIC
-    rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
+        #figure out important features
+        drop_col_feat_imp(rf, X, y, certainLayer, newLayers)
 
-    # eval model on test data
-    print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
-    print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
-    print('layer contribution to RF in descending order:')
-    for x in np.argsort(rf.feature_importances_)[::-1]:
-        # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], newLayers[idx[x]]))
-        print('%3d : %10f : %s' % (x, rf.feature_importances_[x], newLayers[x]))
+        # make predictions and plot them
+        pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer)
 
-    # make predictions and plot them
-    # Z = rf.predict(X)
-    Z = rf.predict_proba(X)[:, 1]  # rerun for pred (since just x, it doesnt use y (veggie))
-    fig = plt.figure(figsize=(10, 6))
-    ax = [None, None]
-    ax[0] = fig.add_subplot(211, projection='3d')
-    ax[0].scatter(xRand, yRand, zRand, s=20, c=Z, vmin=0, vmax=1)
-    ax[0].set_title('Predicted wall')
-    # compare to ground truth
-    ax[1] = fig.add_subplot(212, projection='3d')
-    ax[1].scatter(xRand, yRand, zRand, s=20, c=y, vmin=0)  # , vmax=1)
-    ax[1].set_title(certainLayer)
-    # plt.show()
-    # fig = plt.figure()
-    # plt.scatter(xRand, yRand, s=1, c=nDistMat[:, 20], vmin=0)  # , vmax=1)
-    # plt.title('wsurf')
-    # plt.show()
 
-# testing
-# test = dist_df['W-SURF-COAT']
-# test = test[:1000]
-# plt.scatter(xRand, yRand, s=1, c=test, vmin=0)  # , vmax=1)
-
-# fig = plt.figure(figsize=(10, 6))
-# ax = fig.add_subplot(111, projection='3d')
-# ax.scatter(dist_df['x'], dist_df['y'], dist_df['z'],
-#            s=20, c=(dist_df['E-VEGT-BIOGRW'] == 0), vmin=0, vmax=1)
 
 if __name__ == '__main__':
     main()
