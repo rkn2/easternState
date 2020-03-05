@@ -16,6 +16,7 @@ from factor_analyzer import FactorAnalyzer
 import seaborn as sns
 from sklearn.base import clone
 from scipy.spatial import distance
+from math import atan2
 
 
 def make_spatial_weights(r):
@@ -42,6 +43,9 @@ def points_from_mp(mp, ax=None):
         pts = np.vstack([pts, r])
     return pts
 
+# def split_w_crack():
+#
+#     return
 
 # def makeScree(fa):
 #     ev, v = fa.get_eigenvalues()
@@ -98,6 +102,30 @@ class coordinate_handler(object):
             return [self.xform_front(p) for p in points]
 
 
+def points_in_circle_np(radius, x0=0, y0=0, n=20):
+    theta = np.linspace(0, 2 * np.pi, n)
+    points = np.vstack([np.cos(theta) * radius + x0, np.sin(theta) * radius + y0]).T
+    # plt.scatter(points.T)
+    return points
+
+
+def get_index(name, layers):
+    i = 0
+    index = 0
+    while i < len(layers):
+        lyr = layers[i]
+        if lyr == name:
+            index = i
+        i += 1
+    return index
+
+
+def show_layer_points(polyList):
+    for polygon in polyList:
+        x, y = polygon.exterior.xy
+        plt.plot(x, y)
+
+
 # when you return a bunch of things, should be class; for now funct
 def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
     dist_df = None
@@ -115,17 +143,6 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         bb_all = np.vstack(bb_pts)
         min_max = np.vstack([np.min(bb_all, axis=0), np.max(bb_all, axis=0)])
         work_area = np.prod(np.diff(min_max, axis=0))
-
-        # min_max = np.vstack([np.min(front, axis=0), np.max(front, axis=0)])
-
-        # min_max = np.array([np.Inf * np.ones(2), -np.Inf * np.ones(2)])
-        # for x in all_objs:
-        #     try:
-        #         p = np.array([y for y in x.get_points()])[:, :2]
-        #         min_max[0] = np.min([min_max[0], np.min(p, axis=0)], axis=0)
-        #         min_max[1] = np.max([min_max[1], np.max(p, axis=0)], axis=0)
-        #     except AttributeError:
-        #         pass
 
         # get wall facing
         this_facing = None
@@ -148,12 +165,20 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         layerDict = {}
         # get all the polylines in each layer
         for lyr in layers:
+            # if lyr == 'W-CRACK':
+            #     split_w_crack()
             layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
             polyList = []
             for x in layer_objs:
-                if 'get_points' not in dir(x):
+                if x.dxftype() == 'CIRCLE':
+                    center = x.dxf.center
+                    radius = x.dxf.radius
+                    points = points_in_circle_np(radius, center[0], center[1])
+                elif 'get_points' in dir(x):
+                    points = np.array([y for y in x.get_points()])[:, :2]
+                else:
                     continue
-                points = np.array([y for y in x.get_points()])[:, :2]
+                #
                 points = points.tolist()
                 if len(points) > 2:
                     poly = Polygon(points)
@@ -165,16 +190,10 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
                 if points_3d is None:
                     continue
                 poly = Polygon(points_3d)
-                # ax.plot(*np.array(points_3d).transpose())
                 if poly.area < work_area:
                     polyList.append(poly)
                 else:
                     raise ValueError('A polygon is larger than the work area!')
-            # mp = unary_union(polyList)
-            # mp = MultiPolygon(polyList)
-            # if not mp.is_valid:
-            #     raise RuntimeError
-            # layerDict.update({lyr: MultiPolygon(polyList)})
             layerDict[lyr] = polyList
 
         if 'boundBox' in layerDict:
@@ -275,6 +294,7 @@ def specific_combine(dist_df, newLayers):
 
     return nDistMat, newLayers
 
+
 def cross_corr(dist_df, num_vars=5):
     new_dist_df = dist_df[['E-VEGT-GROWIES', 'E-VEGT-BIOGRW', 'y', 'C-CRCK', 'W-SURF-STAIN-T1']]
     new_dist_df.corr()
@@ -288,8 +308,8 @@ def cross_corr(dist_df, num_vars=5):
     svm = sns.heatmap(new_dist_df.corr(), mask=mask, linewidths=0.1, vmax=1.0,
                       square=True, cmap=colormap, linecolor='white', annot=True)
 
-def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_state=42):
 
+def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_state=42):
     # clone the model to have the exact same specification as the one initially trained
     model_clone = clone(model)
     # set random_state for comparability
@@ -300,8 +320,8 @@ def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_s
     # list for storing feature importances
     importances = []
 
-    nDistMat_df = pd.DataFrame(data=X_train, columns=newLayers +['random'])
-    X_train_df = pd.DataFrame(data=X_train, columns=newLayers+['random'])
+    nDistMat_df = pd.DataFrame(data=X_train, columns=newLayers + ['random'])
+    X_train_df = pd.DataFrame(data=X_train, columns=newLayers + ['random'])
 
     # file1 = open(r"test.txt", "w+")
     # text = []
@@ -313,8 +333,8 @@ def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_s
         drop_col_score = model_clone.score(X_train_df.drop(col, axis=1), y_train)
         importances.append(benchmark_score - drop_col_score)
         # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
-    importances_df =pd.DataFrame(importances, X_train_df.columns)
-    ax = importances_df.plot.barh(rot=0,figsize=(12, 10))
+    importances_df = pd.DataFrame(importances, X_train_df.columns)
+    ax = importances_df.plot.barh(rot=0, figsize=(12, 10))
     fig = ax.get_figure()
     plt.show(block=False)
     plt.close(fig)
@@ -324,6 +344,7 @@ def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_s
     # file1.write(text)
     # file1.close()
     return importances_df
+
 
 def pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer):
     # Z = rf.predict(X)
@@ -340,13 +361,14 @@ def pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer):
     file_name = str(certainLayer) + '_PredVsGround.pdf'
     fig.savefig(file_name)
 
+
 def main():
     # read the cad file
     cadPath = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
     walls = [r'2020 02 06 - DRAFT West Wall mkr-et v02_BN.dxf', r'2020-01-24 - DRAFT North Wall_BN.dxf',
              r'2020-02-06 - DRAFT South Wall_BN.dxf']
     cadFiles = [cadPath + walls[itup[0]] for itup in enumerate(walls)]
-    dist_df = get_data(cadFiles, num_samples=100000)
+    dist_df = get_data(cadFiles, num_samples=1000)
     layers = dist_df.columns
 
     for layer1 in tqdm(layers, total=len(layers)):
@@ -384,7 +406,8 @@ def main():
             continue
 
         # train the random forest
-        rf = RandomForestClassifier(n_estimators=100, max_depth=5, oob_score=True)  # n_estimators=500, WANT LOWER NUMBER --> MORE GENERIC
+        rf = RandomForestClassifier(n_estimators=100, max_depth=5,
+                                    oob_score=True)  # n_estimators=500, WANT LOWER NUMBER --> MORE GENERIC
         rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
 
         # eval model on test data
@@ -395,12 +418,11 @@ def main():
         #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], newLayers[idx[x]]))
         #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], newLayers[x]))
 
-        #figure out important features
+        # figure out important features
         drop_col_feat_imp(rf, X, y, certainLayer, newLayers)
 
         # make predictions and plot them
         pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer)
-
 
 
 if __name__ == '__main__':
