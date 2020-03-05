@@ -43,9 +43,23 @@ def points_from_mp(mp, ax=None):
         pts = np.vstack([pts, r])
     return pts
 
-# def split_w_crack():
-#
-#     return
+
+def get_layer_points(ch, work_area, points):
+    points = points.tolist()
+    if len(points) > 2:
+        poly = Polygon(points)
+        if not poly.is_valid:
+            return None
+    else:
+        return None
+    points_3d = ch.embed(points, allow_inexact=False)
+    if points_3d is None:
+        return None
+    poly = Polygon(points_3d)
+    if poly.area > work_area:
+        return None
+    return poly
+
 
 # def makeScree(fa):
 #     ev, v = fa.get_eigenvalues()
@@ -143,6 +157,8 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         bb_all = np.vstack(bb_pts)
         min_max = np.vstack([np.min(bb_all, axis=0), np.max(bb_all, axis=0)])
         work_area = np.prod(np.diff(min_max, axis=0))
+        ch = coordinate_handler(bb_pts)
+        layerDict = {}
 
         # get wall facing
         this_facing = None
@@ -156,19 +172,12 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         if wall_facing is None:
             raise ValueError('Cannot determine facing from file name! (Looked for %s)' % facing.keys())
 
-        # for visualizing the 3d wall
-        # fig = plt.figure()
-        # ax = fig.add_subplot(111, projection='3d')
+        split_circ_poly = ['W-CRCK']
 
-        ch = coordinate_handler(bb_pts)
-
-        layerDict = {}
         # get all the polylines in each layer
         for lyr in layers:
-            # if lyr == 'W-CRACK':
-            #     split_w_crack()
             layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
-            polyList = []
+            polyList = {'CIRC': [], 'POLY': []}
             for x in layer_objs:
                 if x.dxftype() == 'CIRCLE':
                     center = x.dxf.center
@@ -178,23 +187,26 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
                     points = np.array([y for y in x.get_points()])[:, :2]
                 else:
                     continue
-                #
-                points = points.tolist()
-                if len(points) > 2:
-                    poly = Polygon(points)
-                    if not poly.is_valid:
-                        continue
-                else:
+                poly = get_layer_points(ch, work_area, points)
+                if poly is None:
                     continue
-                points_3d = ch.embed(points, allow_inexact=False)
-                if points_3d is None:
-                    continue
-                poly = Polygon(points_3d)
-                if poly.area < work_area:
-                    polyList.append(poly)
+                if x.dxftype == 'CIRCLE':
+                    polyList['CIRC'].append(poly)
                 else:
-                    raise ValueError('A polygon is larger than the work area!')
-            layerDict[lyr] = polyList
+                    polyList['POLY'].append(poly)
+
+            if lyr in split_circ_poly:
+                for k, v in polyList.items():
+                    layerDict['%s-%s' % (lyr, k)] = v
+            else:
+                layerDict[lyr] = polyList['CIRC'] + polyList['POLY']
+
+        # update the layers list to reflect split layers
+        for lyr in layers:
+            if lyr in split_circ_poly:
+                layers.remove(lyr)
+                for k in polyList.keys():
+                    layers.append('%s-%s' % (lyr, k))
 
         if 'boundBox' in layerDict:
             del layerDict['boundBox']
@@ -403,7 +415,9 @@ def main():
         train_mat = ~test_mat
 
         if np.sum(y[train_mat]) == 0 or np.sum(~y[train_mat]) == 0:
+            print('skipping %s' % certainLayer)
             continue
+
 
         # train the random forest
         rf = RandomForestClassifier(n_estimators=100, max_depth=5,
