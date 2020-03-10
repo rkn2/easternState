@@ -150,15 +150,17 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         all_objs = [e for e in msp]
         layers = sorted(set([x.dxf.layer for x in all_objs]))  # set is a list of unique items
 
+        # right now we have wcrack; where does it go?
+
         bb = [x for x in all_objs if 'boundBox' in x.dxf.layer]
         bb_pts = [np.array([x[:2] for x in y.get_points()]) for y in bb]
-        bottom_left = [np.min(x, axis=0) for x in bb_pts]
+        # bottom_left = [np.min(x, axis=0) for x in bb_pts]
 
         bb_all = np.vstack(bb_pts)
         min_max = np.vstack([np.min(bb_all, axis=0), np.max(bb_all, axis=0)])
         work_area = np.prod(np.diff(min_max, axis=0))
         ch = coordinate_handler(bb_pts)
-        layerDict = {}
+        layer_dict = {}
 
         # get wall facing
         this_facing = None
@@ -173,52 +175,70 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
             raise ValueError('Cannot determine facing from file name! (Looked for %s)' % facing.keys())
 
         split_circ_poly = ['W-CRCK']
+        accepted_lines = ['W-CRCK']
+        remove_layers = ['boundBox']
+
+        # still have it, 19 is w-crack
 
         # get all the polylines in each layer
         for lyr in layers:
             layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
-            polyList = {'CIRC': [], 'POLY': []}
-            for x in layer_objs:
-                if x.dxftype() == 'CIRCLE':
-                    center = x.dxf.center
-                    radius = x.dxf.radius
+            # 0 is lwpoly and 40 is circle
+            poly_list = {'CIRC': [], 'POLY': []}
+            for obj in layer_objs:
+                if obj.dxftype() == 'CIRCLE':
+                    center = obj.dxf.center
+                    radius = obj.dxf.radius
                     points = points_in_circle_np(radius, center[0], center[1])
-                elif 'get_points' in dir(x):
-                    points = np.array([y for y in x.get_points()])[:, :2]
+                elif 'get_points' in dir(obj):
+                    points = np.array([y for y in obj.get_points()])[:, :2]
                 else:
+                    aa = lyr
                     continue
-                poly = get_layer_points(ch, work_area, points)
-                if poly is None:
-                    continue
-                if x.dxftype == 'CIRCLE':
-                    polyList['CIRC'].append(poly)
+                if obj.dxftype() == 'CIRCLE':
+                    poly = get_layer_points(ch, work_area, points)
+                    if poly is None:
+                        aa = lyr
+                        continue
+                    poly_list['CIRC'].append(poly)
+                    # has one v for k now
+                elif obj.closed == False and lyr[:-5] in accepted_lines:
+                    #  obj[0] shows x and y point for first click
+                    points = np.array([y for y in obj])[:, :2]
+                    points2 = [[x + 10, y] for [x, y] in points]
+                    points = np.vstack([points, points2[::-1], points[0]])
+                    # points = sorted(points, key=lambda k: [k[1], k[0]])
                 else:
-                    polyList['POLY'].append(poly)
+                    poly = get_layer_points(ch, work_area, points)
+                    if poly is None:
+                        aa = lyr
+                        continue
+                    poly_list['POLY'].append(poly)
 
             if lyr in split_circ_poly:
-                for k, v in polyList.items():
-                    layerDict['%s-%s' % (lyr, k)] = v
+                for k, v in poly_list.items():
+                    layer_dict['%s-%s' % (lyr, k)] = v
             else:
-                layerDict[lyr] = polyList['CIRC'] + polyList['POLY']
+                layer_dict[lyr] = poly_list['CIRC'] + poly_list['POLY']
+
+        # still have it
 
         # update the layers list to reflect split layers
         for lyr in layers:
             if lyr in split_circ_poly:
                 layers.remove(lyr)
-                for k in polyList.keys():
+                for k in poly_list.keys():
                     layers.append('%s-%s' % (lyr, k))
 
-        if 'boundBox' in layerDict:
-            del layerDict['boundBox']
-        if 'boundBox' in layers:
-            layers.remove('boundBox')
+        _ = [layer_dict.pop(rm_file) for rm_file in remove_layers if rm_file in layer_dict]
+        _ = [layers.remove(rm_file) for rm_file in remove_layers if rm_file in layers]
 
         # pick random points and convert them to 3d
         pointList = []
         while len(pointList) < num_samples:
-            x = np.random.uniform(min_max[0, 0], min_max[1, 0])
+            obj = np.random.uniform(min_max[0, 0], min_max[1, 0])
             y = np.random.uniform(min_max[0, 1], min_max[1, 1])
-            r = ch.embed([[x, y]], allow_inexact=False)
+            r = ch.embed([[obj, y]], allow_inexact=False)
             if r is None:
                 continue
             else:
@@ -231,7 +251,7 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
             # todo: create a point_facing that specifies the direction of the normal
             # point_facing[i] =
             for j, layer in enumerate(layers):
-                mp = layerDict[layer]
+                mp = layer_dict[layer]
                 # mp_pts = points_from_mp(mp, ax=ax)
                 mp_pts = points_from_mp(mp, ax=None)
                 z_levels = np.unique(mp_pts[:, 2])
@@ -374,18 +394,17 @@ def pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer):
     fig.savefig(file_name)
 
 
-def main():
+def main(thresh=50):
     # read the cad file
     cadPath = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
     walls = [r'2020 02 06 - DRAFT West Wall mkr-et v02_BN.dxf', r'2020-01-24 - DRAFT North Wall_BN.dxf',
              r'2020-02-06 - DRAFT South Wall_BN.dxf']
     cadFiles = [cadPath + walls[itup[0]] for itup in enumerate(walls)]
     dist_df = get_data(cadFiles, num_samples=1000)
-    layers = dist_df.columns
+    layers = dist_df.columns #have the cracks split here so thats good
 
-    for layer1 in tqdm(layers, total=len(layers)):
+    for certainLayer in tqdm(layers, total=len(layers)): #changed
         # to get index of certain layer
-        certainLayer = layer1
         prohibited_layers = ['0', certainLayer]
         layer_order = sorted(dist_df.keys())
         nDistMat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
@@ -396,7 +415,7 @@ def main():
         nDistMat = np.vstack([nDistMat, rand_column])
 
         X = nDistMat.transpose()
-        y = dist_df[certainLayer].values == 0
+        y = dist_df[certainLayer].values <= thresh
 
         # # transform to (0, 1)
         # nDistMat = np.exp(-nDistMat/1e3)
@@ -413,11 +432,10 @@ def main():
         test_mat = np.zeros(X.shape[0], dtype=np.bool)
         test_mat[test_idx] = True
         train_mat = ~test_mat
-
+        print('working on %s' % certainLayer)
         if np.sum(y[train_mat]) == 0 or np.sum(~y[train_mat]) == 0:
             print('skipping %s' % certainLayer)
             continue
-
 
         # train the random forest
         rf = RandomForestClassifier(n_estimators=100, max_depth=5,
