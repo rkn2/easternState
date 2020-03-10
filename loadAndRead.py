@@ -162,7 +162,10 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         opposing = {'North': 2, 'East': 3, 'South': 0, 'West': 1}
         for k, v in facing.items():
             if k in file:
+                # todo: ask wes about top half and bottom half for z component
+                # todo: ask wes why we need it for num_samples
                 wall_facing = facing[k] * np.ones(num_samples)
+                # todo: make column for interior or exterior of the place (is that point facing?)
                 wall_opposite = opposing[k]
                 point_facing = -np.ones(num_samples)
         if wall_facing is None:
@@ -171,8 +174,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         split_circ_poly = ['W-CRCK']
         accepted_lines = ['W-CRCK']
         remove_layers = ['boundBox']
-
-        # still have it, 19 is w-crack
+        # todo: w-mrtr-fnsh-t2 see trello board (inverse of others)
 
         # get all the polylines in each layer
         for lyr in layers:
@@ -215,8 +217,6 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
             else:
                 layer_dict[lyr] = poly_list['CIRC'] + poly_list['POLY']
 
-        # still have it
-
         # update the layers list to reflect split layers
         for lyr in layers:
             if lyr in split_circ_poly:
@@ -242,7 +242,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         dist_mat = np.ones([num_samples, len(layers)], dtype=np.float) * np.Inf
 
         for i, r in tqdm(enumerate(point_list), total=len(point_list)):
-            # todo: create a point_facing that specifies the direction of the normal
+            # todo: wes said: create a point_facing that specifies the direction of the normal
             # point_facing[i] =
             for j, layer in enumerate(layers):
                 mp = layer_dict[layer]
@@ -260,6 +260,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
         dist_df_single = pd.DataFrame.from_dict(dist_dict)
         dist_df_single.insert(0, 'wall_facing', wall_facing)
+        dist_df_single.insert(0, 'wall_opposite', wall_opposite)
         # dist_df_single.insert(0, 'point_facing', point_facing)
         dist_df_single.insert(0, 'z', point_list[:, 2])
         dist_df_single.insert(0, 'y', point_list[:, 1])
@@ -387,7 +388,7 @@ def pred_locations(x_rand, y_rand, zRand, rf, X, y, certain_layer):
     file_name = str(certain_layer) + '_PredVsGround.pdf'
     fig.savefig(file_name)
 
-
+# todo: threshold is an issue
 def main(thresh=50):
     # read the cad file
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
