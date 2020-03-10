@@ -1,22 +1,18 @@
 #!/usr/bin/env python
 # in terminal pip install ezdxf==0.6.2
 import ezdxf
-import os
-import math
 import numpy as np
 from tqdm import tqdm
 from shapely.geometry import Point
 from shapely.geometry import Polygon, MultiPolygon
-from shapely.ops import unary_union
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
-from factor_analyzer import FactorAnalyzer
+from mpl_toolkits.mplot3d import axes3d, Axes3D
+# from factor_analyzer import FactorAnalyzer
 import seaborn as sns
 from sklearn.base import clone
 from scipy.spatial import distance
-from math import atan2
 
 
 def make_spatial_weights(r):
@@ -30,8 +26,8 @@ def make_spatial_weights(r):
 def get_spatial_correlation(x, y, W):
     x_norm = (x - np.mean(x)) / np.sqrt(np.var(x))
     y_norm = (y - np.mean(y)) / np.sqrt(np.var(y))
-    Rc = np.matmul(np.matmul(x_norm.transpose(), W), y_norm)
-    return Rc
+    rc = np.matmul(np.matmul(x_norm.transpose(), W), y_norm)
+    return rc
 
 
 def points_from_mp(mp, ax=None):
@@ -71,7 +67,7 @@ def get_layer_points(ch, work_area, points):
 #     plt.grid()
 #     plt.show()
 
-class coordinate_handler(object):
+class coordHandler(object):
     def __init__(self, bb_pts):
         # get vertical sequence of wall segments
         vert_order = np.argsort([np.min(x[:, 1]) for x in bb_pts])
@@ -134,23 +130,21 @@ def get_index(name, layers):
     return index
 
 
-def show_layer_points(polyList):
-    for polygon in polyList:
+def show_layer_points(poly_list):
+    for polygon in poly_list:
         x, y = polygon.exterior.xy
         plt.plot(x, y)
 
 
 # when you return a bunch of things, should be class; for now funct
-def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
+def get_data(cad_files, num_samples=1000):  # cadFile is complete path
     dist_df = None
-    for file in cadFiles:
+    for file in cad_files:
         doc = ezdxf.readfile(file)
-        # record all entities in modelspace
+        # record all entities in model space
         msp = doc.modelspace()
         all_objs = [e for e in msp]
-        layers = sorted(set([x.dxf.layer for x in all_objs]))  # set is a list of unique items
-
-        # right now we have wcrack; where does it go?
+        layers = sorted(set([x.dxf.layer for x in all_objs]))
 
         bb = [x for x in all_objs if 'boundBox' in x.dxf.layer]
         bb_pts = [np.array([x[:2] for x in y.get_points()]) for y in bb]
@@ -159,7 +153,7 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         bb_all = np.vstack(bb_pts)
         min_max = np.vstack([np.min(bb_all, axis=0), np.max(bb_all, axis=0)])
         work_area = np.prod(np.diff(min_max, axis=0))
-        ch = coordinate_handler(bb_pts)
+        ch = coordHandler(bb_pts)
         layer_dict = {}
 
         # get wall facing
@@ -234,20 +228,20 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         _ = [layers.remove(rm_file) for rm_file in remove_layers if rm_file in layers]
 
         # pick random points and convert them to 3d
-        pointList = []
-        while len(pointList) < num_samples:
+        point_list = []
+        while len(point_list) < num_samples:
             obj = np.random.uniform(min_max[0, 0], min_max[1, 0])
             y = np.random.uniform(min_max[0, 1], min_max[1, 1])
             r = ch.embed([[obj, y]], allow_inexact=False)
             if r is None:
                 continue
             else:
-                pointList.append(r[0])
-        pointList = np.array(pointList)
+                point_list.append(r[0])
+        point_list = np.array(point_list)
 
-        distMat = np.ones([num_samples, len(layers)], dtype=np.float) * np.Inf
+        dist_mat = np.ones([num_samples, len(layers)], dtype=np.float) * np.Inf
 
-        for i, r in tqdm(enumerate(pointList), total=len(pointList)):
+        for i, r in tqdm(enumerate(point_list), total=len(point_list)):
             # todo: create a point_facing that specifies the direction of the normal
             # point_facing[i] =
             for j, layer in enumerate(layers):
@@ -261,26 +255,26 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
                 d = np.min(r_dists)
                 if d == 0 and r[2] not in z_levels:
                     d = np.min(np.abs(z_levels - r[2]))
-                distMat[i, j] = d
+                dist_mat[i, j] = d
 
-        dist_dict = {layer: distMat[:, j] for j, layer in enumerate(layers)}
+        dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
         dist_df_single = pd.DataFrame.from_dict(dist_dict)
         dist_df_single.insert(0, 'wall_facing', wall_facing)
         # dist_df_single.insert(0, 'point_facing', point_facing)
-        dist_df_single.insert(0, 'z', pointList[:, 2])
-        dist_df_single.insert(0, 'y', pointList[:, 1])
-        dist_df_single.insert(0, 'x', pointList[:, 0])
+        dist_df_single.insert(0, 'z', point_list[:, 2])
+        dist_df_single.insert(0, 'y', point_list[:, 1])
+        dist_df_single.insert(0, 'x', point_list[:, 0])
         if dist_df is None:
             dist_df = dist_df_single
         else:
             # dist_df = pd.merge(left=dist_df, right=dist_df_single, how='outer')
             dist_df = pd.merge(left=dist_df, right=dist_df_single, how='inner')
 
-        # remove NaNs from final dataframe
+        # remove NaNs from final data frame
         dist_df[np.isnan(dist_df)] = np.Inf
 
         # visualize results
-        # fig, ax = plt.subplots(1, 1, figsize=(10, 4))
+        # fig, ax = plt.subplots(1, 1, fig_size=(10, 4))
         # ax.scatter(xRand, yRand, c=dist_df['E-VEGT-BIOGRW'])
         # ax.set_xlim(min_max[:, 0])
         # ax.set_ylim(min_max[:, 1])
@@ -289,15 +283,15 @@ def get_data(cadFiles, num_samples=1000):  # cadFile is complete path
         return dist_df
 
 
-def specific_combine(dist_df, newLayers):
+def specific_combine(dist_df, new_layers):
     layers = dist_df.columns
     for layer in layers:
         # for new in newLayers:
-        if layer not in newLayers and bool([ele for ele in newLayers if (ele in layer)]) == False:
-            newLayers.append(layer)
+        if layer not in new_layers and bool([ele for ele in new_layers if (ele in layer)]) == False:
+            new_layers.append(layer)
 
-    newLayers.append('E-METL-T1')
-    newLayers.append('E-METL-T4')
+    new_layers.append('E-METL-T1')
+    new_layers.append('E-METL-T4')
 
     num_points = None
     for layer in layers:
@@ -307,8 +301,8 @@ def specific_combine(dist_df, newLayers):
             if len(dist_df[layer]) != num_points:
                 raise ValueError('All layers must have same number of points!')
 
-    nDistMat = np.ones([num_points, len(newLayers)]) * np.inf
-    for i, entry in enumerate(newLayers):
+    n_dist_mat = np.ones([num_points, len(new_layers)]) * np.inf
+    for i, entry in enumerate(new_layers):
         these_layers = []
         for j, layer in enumerate(layers):
             if entry in layer:
@@ -319,12 +313,12 @@ def specific_combine(dist_df, newLayers):
                     these_layers.append(layer)
         if len(these_layers) > 0:
             these_dists = np.vstack([dist_df[layer] for layer in these_layers]).transpose()
-            nDistMat[:, i] = np.min(these_dists, axis=1)
+            n_dist_mat[:, i] = np.min(these_dists, axis=1)
         # print('the layers are: ' + str(these_layers))
 
-    # truthMat = np.exp(-nDistMat ** 2 / 8e4)
+    # truthMat = np.exp(-n_dist_mat ** 2 / 8e4)
 
-    return nDistMat, newLayers
+    return n_dist_mat, new_layers
 
 
 def cross_corr(dist_df, num_vars=5):
@@ -341,7 +335,7 @@ def cross_corr(dist_df, num_vars=5):
                       square=True, cmap=colormap, linecolor='white', annot=True)
 
 
-def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_state=42):
+def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random_state=42):
     # clone the model to have the exact same specification as the one initially trained
     model_clone = clone(model)
     # set random_state for comparability
@@ -352,8 +346,8 @@ def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_s
     # list for storing feature importances
     importances = []
 
-    nDistMat_df = pd.DataFrame(data=X_train, columns=newLayers + ['random'])
-    X_train_df = pd.DataFrame(data=X_train, columns=newLayers + ['random'])
+    n_dist_mat_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
+    X_train_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
 
     # file1 = open(r"test.txt", "w+")
     # text = []
@@ -370,7 +364,7 @@ def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_s
     fig = ax.get_figure()
     plt.show(block=False)
     plt.close(fig)
-    file_name = str(certainLayer) + '.pdf'
+    file_name = str(certain_layer) + '.pdf'
     ax.figure.savefig(file_name)
 
     # file1.write(text)
@@ -378,51 +372,51 @@ def drop_col_feat_imp(model, X_train, y_train, certainLayer, newLayers, random_s
     return importances_df
 
 
-def pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer):
+def pred_locations(x_rand, y_rand, zRand, rf, X, y, certain_layer):
     # Z = rf.predict(X)
     Z = rf.predict_proba(X)[:, 1]  # rerun for pred (since just x, it doesnt use y (veggie))
     fig = plt.figure(figsize=(10, 6))
     ax = [None, None]
     ax[0] = fig.add_subplot(211, projection='3d')
-    ax[0].scatter(xRand, yRand, zRand, s=20, c=Z, vmin=0, vmax=1)
-    ax[0].set_title('Predicted wall for ' + certainLayer)
+    ax[0].scatter(x_rand, y_rand, zRand, s=20, c=Z, vmin=0, vmax=1)
+    ax[0].set_title('Predicted wall for ' + certain_layer)
     # compare to ground truth
     ax[1] = fig.add_subplot(212, projection='3d')
-    ax[1].scatter(xRand, yRand, zRand, s=20, c=y, vmin=0)  # , vmax=1)
-    ax[1].set_title('Ground truth for ' + certainLayer)
-    file_name = str(certainLayer) + '_PredVsGround.pdf'
+    ax[1].scatter(x_rand, y_rand, zRand, s=20, c=y, vmin=0)  # , vmax=1)
+    ax[1].set_title('Ground truth for ' + certain_layer)
+    file_name = str(certain_layer) + '_PredVsGround.pdf'
     fig.savefig(file_name)
 
 
 def main(thresh=50):
     # read the cad file
-    cadPath = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
+    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
     walls = [r'2020 02 06 - DRAFT West Wall mkr-et v02_BN.dxf', r'2020-01-24 - DRAFT North Wall_BN.dxf',
              r'2020-02-06 - DRAFT South Wall_BN.dxf']
-    cadFiles = [cadPath + walls[itup[0]] for itup in enumerate(walls)]
-    dist_df = get_data(cadFiles, num_samples=1000)
-    layers = dist_df.columns #have the cracks split here so thats good
+    cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
+    dist_df = get_data(cad_files, num_samples=1000)
+    layers = dist_df.columns  # have the cracks split here so thats good
 
-    for certainLayer in tqdm(layers, total=len(layers)): #changed
+    for certainLayer in tqdm(layers, total=len(layers)):  # changed
         # to get index of certain layer
         prohibited_layers = ['0', certainLayer]
         layer_order = sorted(dist_df.keys())
-        nDistMat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
-        # newLayers = layers
-        newLayers = [k for k in layer_order if k not in prohibited_layers]
+        n_dist_mat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
+        # new_layers = layers
+        new_layers = [k for k in layer_order if k not in prohibited_layers]
 
-        rand_column = np.random.randint(2, size=nDistMat.shape[1])
-        nDistMat = np.vstack([nDistMat, rand_column])
+        rand_column = np.random.randint(2, size=n_dist_mat.shape[1])
+        n_dist_mat = np.vstack([n_dist_mat, rand_column])
 
-        X = nDistMat.transpose()
+        X = n_dist_mat.transpose()
         y = dist_df[certainLayer].values <= thresh
 
         # # transform to (0, 1)
-        # nDistMat = np.exp(-nDistMat/1e3)
+        # n_dist_mat = np.exp(-n_dist_mat/1e3)
 
-        xRand = np.array(dist_df['x'])
-        yRand = np.array(dist_df['y'])
-        zRand = np.array(dist_df['z'])
+        x_rand = np.array(dist_df['x'])
+        y_rand = np.array(dist_df['y'])
+        z_rand = np.array(dist_df['z'])
         X[np.isinf(X)] = 1e12
 
         # set aside some data for testing the model later
@@ -447,14 +441,14 @@ def main(thresh=50):
         # print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
         # print('layer contribution to RF in descending order:')
         # for x in np.argsort(rf.feature_importances_)[::-1]:
-        #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], newLayers[idx[x]]))
-        #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], newLayers[x]))
+        #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], new_layers[idx[x]]))
+        #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], new_layers[x]))
 
         # figure out important features
-        drop_col_feat_imp(rf, X, y, certainLayer, newLayers)
+        drop_col_feat_imp(rf, X, y, certainLayer, new_layers)
 
         # make predictions and plot them
-        pred_locations(xRand, yRand, zRand, rf, X, y, certainLayer)
+        pred_locations(x_rand, y_rand, z_rand, rf, X, y, certainLayer)
 
 
 if __name__ == '__main__':
