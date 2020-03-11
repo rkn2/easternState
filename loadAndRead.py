@@ -159,15 +159,10 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         # get wall wall_directions
         this_facing = None
         wall_directions = {'North': 0, 'East': 1, 'South': 2, 'West': 3}
-        opposing = {'North': 2, 'East': 3, 'South': 0, 'West': 1}
         for k, v in wall_directions.items():
             if k in file:
-                # todo: ask wes about top half and bottom half for z component
-                # todo: ask wes why we need it for num_samples
                 wall_position = wall_directions[k] * np.ones(num_samples)
-                # todo: make column for interior or exterior of the place (is that point wall_directions?)
-                wall_opposite = opposing[k]
-                point_facing = -np.ones(num_samples)
+                point_facing = wall_directions[k] * np.ones(num_samples)
         if wall_position is None:
             raise ValueError('Cannot determine wall_directions from file name! (Looked for %s)' % wall_directions.keys())
 
@@ -239,12 +234,17 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
                 point_list.append(r[0])
         point_list = np.array(point_list)
 
+        inside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 0])
+        point_facing[inside_idx] = (wall_position[inside_idx] + 2) % 4
+        outside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 1])
+        point_facing[outside_idx] = wall_position[outside_idx]
+        coping_idx = np.argwhere((point_list[:, 2] > ch.bounds[2, 0]) * (point_list[:, 2] < ch.bounds[2, 1]))
+        point_facing[coping_idx] = -1
+
         dist_mat = np.ones([num_samples, len(layer_dict.keys())], dtype=np.float) * np.Inf
 
         z_thresh = ch.bounds[2, 1] - ch.bounds[2, 0]
         for i, r in tqdm(enumerate(point_list), total=len(point_list)):
-            # todo: wes said: create a point_facing that specifies the direction of the normal
-            # point_facing[i] =
             for j, layer in enumerate(layer_dict.keys()):
                 mp = layer_dict[layer]
                 # mp_pts = points_from_mp(mp, ax=ax)
@@ -265,13 +265,12 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         # fig = plt.figure(figsize=(10, 6))
         # ax = [None]
         # ax[0] = fig.add_subplot(111, projection='3d')
-        # ax[0].scatter(point_list.T[0], point_list.T[1], point_list.T[2], s=20, c=dist_mat.flatten(), vmin=0, vmax=z_thresh)
+        # ax[0].scatter(point_list.T[0], point_list.T[1], point_list.T[2], s=20, c=point_facing.flatten(), vmin=-1, vmax=3)
 
         dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
         dist_df_single = pd.DataFrame.from_dict(dist_dict)
         dist_df_single.insert(0, 'wall_position', wall_position)
-        dist_df_single.insert(0, 'wall_opposite', wall_opposite)
-        # dist_df_single.insert(0, 'point_facing', point_facing)
+        dist_df_single.insert(0, 'point_facing', point_facing)
         dist_df_single.insert(0, 'z', point_list[:, 2])
         dist_df_single.insert(0, 'y', point_list[:, 1])
         dist_df_single.insert(0, 'x', point_list[:, 0])
@@ -398,7 +397,6 @@ def pred_locations(x_rand, y_rand, zRand, rf, X, y, certain_layer):
     file_name = str(certain_layer) + '_PredVsGround.pdf'
     fig.savefig(file_name)
 
-# todo: threshold is an issue
 def main(thresh=10):
     # read the cad file
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
