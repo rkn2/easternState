@@ -423,15 +423,15 @@ def pred_locations(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
 def main(thresh=10):
     # read the cad file
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_2_7_files/CAD_Progress/"
-    walls = [r'2020 02 06 - DRAFT West Wall mkr-et v02_BN.dxf', r'2020-01-24 - DRAFT North Wall_BN.dxf',
-             r'2020-02-06 - DRAFT South Wall_BN.dxf']
+    walls = [r'2020 03 11 - et - DRAFT West Wall_BN.dxf', r'2020 03 11 - et - DRAFT North Wall_BN.dxf',
+             r'2020 03 11 - et - DRAFT South Wall_BN.dxf', r'2020 03 11 - et - DRAFT East Wall_BN.dxf']
     cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
     dist_df = get_data(cad_files, num_samples=1000)
     layers = dist_df.columns
 
     for certainLayer in tqdm(layers, total=len(layers)):
         # to get index of certain layer
-        prohibited_layers = ['0', certainLayer]
+        prohibited_layers = ['0', certainLayer, 'W-STON-DELM', 'W-STON-STRAT', 'E-METL-T3', 'W-STON-RESET-T4']
         layer_order = sorted(dist_df.keys())
         n_dist_mat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
         # new_layers = layers
