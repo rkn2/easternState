@@ -13,6 +13,7 @@ from mpl_toolkits.mplot3d import axes3d, Axes3D
 import seaborn as sns
 from sklearn.base import clone
 from scipy.spatial import distance
+import collections
 
 
 def make_spatial_weights(r):
@@ -44,16 +45,20 @@ def get_layer_points(ch, work_area, points):
     points = points.tolist()
     if len(points) > 2:
         poly = Polygon(points)
-        if not poly.is_valid:
-            return None
+        if not poly.exterior.is_valid:
+            # return None
+            if poly.convex_hull.exterior.is_valid:
+                poly = poly.convex_hull
+            else:
+                return None
     else:
         return None
     points_3d = ch.embed(points, allow_inexact=False)
     if points_3d is None:
         return None
     poly = Polygon(points_3d)
-    if poly.area > work_area:
-        return None
+    # if poly.area > work_area or not poly.exterior.is_valid:
+    #     return None
     return poly
 
 
@@ -99,7 +104,10 @@ class coordHandler(object):
         # points = [p for p in raw_points if self.all_segments.contains(Point(p))]
         # if len(points) < 3:
         #     return None
-        cent = np.mean(points, axis=0)
+        if len(points) > 3:
+            cent = Polygon(points).centroid
+        else:
+            cent = Point(np.mean(points, axis=0))
         segment_distance = [x.distance(Point(cent)) for x in self.segments]
         best_segment = np.argmin(segment_distance)
         if not allow_inexact and segment_distance[best_segment] > 0:
@@ -131,9 +139,10 @@ def get_index(name, layers):
 
 
 def show_layer_points(poly_list):
-    for polygon in poly_list:
-        x, y = polygon.exterior.xy
-        plt.plot(x, y)
+    for k in poly_list.keys():
+        for polygon in poly_list[k]:
+            x, y = polygon.exterior.xy
+            plt.plot(x, y)
 
 
 # when you return a bunch of things, should be class; for now funct
@@ -146,10 +155,8 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         all_objs = [e for e in msp]
         layers = sorted(set([x.dxf.layer for x in all_objs]))
 
-        bb = [x for x in all_objs if 'boundBox' in x.dxf.layer]
+        bb = [x for x in all_objs if 'boundBox' in x.dxf.layer]  # This still covers new layers
         bb_pts = [np.array([x[:2] for x in y.get_points()]) for y in bb]
-        # bottom_left = [np.min(x, axis=0) for x in bb_pts]
-
         bb_all = np.vstack(bb_pts)
         min_max = np.vstack([np.min(bb_all, axis=0), np.max(bb_all, axis=0)])
         work_area = np.prod(np.diff(min_max, axis=0))
@@ -164,11 +171,14 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
                 wall_position = wall_directions[k] * np.ones(num_samples)
                 point_facing = wall_directions[k] * np.ones(num_samples)
         if wall_position is None:
-            raise ValueError('Cannot determine wall_directions from file name! (Looked for %s)' % wall_directions.keys())
+            raise ValueError(
+                'Cannot determine wall_directions from file name! (Looked for %s)' % wall_directions.keys())
 
         split_circ_poly = ['W-CRCK']
         accepted_lines = ['W-CRCK']
-        remove_layers = ['boundBox']
+        remove_layers = []  # 'boundBox'
+        open_poly_layers = collections.defaultdict(int)
+        none_layer = collections.defaultdict(int)
         # todo: w-mrtr-fnsh-t2 see trello board (inverse of others)
         # 17 is biogrowth on north
         # get all the polylines in each layer
@@ -176,7 +186,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
             layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
             # 0 is lwpoly and 40 is circle
             poly_list = {'CIRC': [], 'POLY': []}
-            for obj in layer_objs:
+            for idx, obj in enumerate(layer_objs):
                 if obj.dxftype() == 'CIRCLE':
                     center = obj.dxf.center
                     radius = obj.dxf.radius
@@ -184,27 +194,34 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
                 elif 'get_points' in dir(obj):
                     points = np.array([y for y in obj.get_points()])[:, :2]
                 else:
-                    aa = lyr
+                    # print('Problem reading points from %d in layer %s' % (idx, lyr))
                     continue
                 if obj.dxftype() == 'CIRCLE':
                     poly = get_layer_points(ch, work_area, points)
                     if poly is None:
-                        aa = lyr
+                        print('Problem creating circle from %d in layer %s' % (idx, lyr))
                         continue
                     poly_list['CIRC'].append(poly)
                     # has one v for k now
-                elif obj.closed == False and lyr[:-5] in accepted_lines:
-                    #  obj[0] shows x and y point for first click
-                    points = np.array([y for y in obj])[:, :2]
-                    points2 = [[x + 10, y] for [x, y] in points]
-                    points = np.vstack([points, points2[::-1], points[0]])
-                    # points = sorted(points, key=lambda k: [k[1], k[0]])
                 else:
                     poly = get_layer_points(ch, work_area, points)
-                    if poly is None:
-                        aa = lyr
+                    if poly:  # and poly.is_valid and poly.exterior.is_closed:
+                        poly_list['POLY'].append(poly)
                         continue
-                    poly_list['POLY'].append(poly)
+                    #
+                    has_exterior = 'exterior' in dir(obj)
+                    if not has_exterior or (has_exterior and not obj.exterior.is_closed):
+                        ext_points = np.vstack([points - np.array([1e-2, 0]), points[::-1] + np.array([1e-2, 0])])
+                        poly = get_layer_points(ch, work_area, ext_points)
+                        if poly:  # and poly.is_valid and poly.exterior.is_closed:
+                            poly_list['POLY'].append(poly)
+                            continue
+                    else:
+                        print('dont know what to do with %d in layer %s' % (idx, lyr))
+                    if poly is None:
+                        none_layer[lyr] += 1
+                        if none_layer[lyr] > 1 and 'ANNO' not in lyr:
+                            print('got anomalous None poly from %s - %d' % (lyr, idx))
 
             if lyr in split_circ_poly:
                 for k, v in poly_list.items():
@@ -234,13 +251,6 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
                 point_list.append(r[0])
         point_list = np.array(point_list)
 
-        inside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 0])
-        point_facing[inside_idx] = (wall_position[inside_idx] + 2) % 4
-        outside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 1])
-        point_facing[outside_idx] = wall_position[outside_idx]
-        coping_idx = np.argwhere((point_list[:, 2] > ch.bounds[2, 0]) * (point_list[:, 2] < ch.bounds[2, 1]))
-        point_facing[coping_idx] = -1
-
         dist_mat = np.ones([num_samples, len(layer_dict.keys())], dtype=np.float) * np.Inf
 
         z_thresh = ch.bounds[2, 1] - ch.bounds[2, 0]
@@ -267,6 +277,14 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         # ax[0] = fig.add_subplot(111, projection='3d')
         # ax[0].scatter(point_list.T[0], point_list.T[1], point_list.T[2], s=20, c=point_facing.flatten(), vmin=-1, vmax=3)
 
+        # todo: fix inside vs outside
+        inside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 0])
+        point_facing[inside_idx] = (wall_position[inside_idx] + 2) % 4
+        outside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 1])
+        point_facing[outside_idx] = wall_position[outside_idx]
+        coping_idx = np.argwhere((point_list[:, 2] > ch.bounds[2, 0]) * (point_list[:, 2] < ch.bounds[2, 1]))
+        point_facing[coping_idx] = -1
+
         dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
         dist_df_single = pd.DataFrame.from_dict(dist_dict)
         dist_df_single.insert(0, 'wall_position', wall_position)
@@ -274,6 +292,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         dist_df_single.insert(0, 'z', point_list[:, 2])
         dist_df_single.insert(0, 'y', point_list[:, 1])
         dist_df_single.insert(0, 'x', point_list[:, 0])
+
         if dist_df is None:
             dist_df = dist_df_single
         else:
@@ -373,6 +392,9 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     ax = importances_df.plot.barh(rot=0, figsize=(12, 10))
     fig = ax.get_figure()
     plt.show(block=False)
+    rand_mag = np.abs(importances_df.values[-1])
+    ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
+    ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
     plt.close(fig)
     file_name = str(certain_layer) + '.pdf'
     ax.figure.savefig(file_name)
@@ -382,31 +404,32 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     return importances_df
 
 
-def pred_locations(x_rand, y_rand, zRand, rf, X, y, certain_layer):
+def pred_locations(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     # Z = rf.predict(X)
     Z = rf.predict_proba(X)[:, 1]  # rerun for pred (since just x, it doesnt use y (veggie))
     fig = plt.figure(figsize=(10, 6))
     ax = [None, None]
     ax[0] = fig.add_subplot(211, projection='3d')
-    ax[0].scatter(x_rand, y_rand, zRand, s=20, c=Z, vmin=0, vmax=1)
+    ax[0].scatter(x_rand, y_rand, z_rand, s=20, c=Z, vmin=0, vmax=1)
     ax[0].set_title('Predicted wall for ' + certain_layer)
     # compare to ground truth
     ax[1] = fig.add_subplot(212, projection='3d')
-    ax[1].scatter(x_rand, y_rand, zRand, s=20, c=y, vmin=0)  # , vmax=1)
+    ax[1].scatter(x_rand, y_rand, z_rand, s=20, c=y, vmin=0)  # , vmax=1)
     ax[1].set_title('Ground truth for ' + certain_layer)
     file_name = str(certain_layer) + '_PredVsGround.pdf'
     fig.savefig(file_name)
 
+
 def main(thresh=10):
     # read the cad file
-    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_1_28_files/allOfIt/"
+    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_2_7_files/CAD_Progress/"
     walls = [r'2020 02 06 - DRAFT West Wall mkr-et v02_BN.dxf', r'2020-01-24 - DRAFT North Wall_BN.dxf',
              r'2020-02-06 - DRAFT South Wall_BN.dxf']
     cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
     dist_df = get_data(cad_files, num_samples=1000)
-    layers = dist_df.columns  # have the cracks split here so thats good
+    layers = dist_df.columns
 
-    for certainLayer in tqdm(layers, total=len(layers)):  # changed
+    for certainLayer in tqdm(layers, total=len(layers)):
         # to get index of certain layer
         prohibited_layers = ['0', certainLayer]
         layer_order = sorted(dist_df.keys())
