@@ -178,13 +178,12 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
 
         split_circ_poly = ['W-CRCK']
         accepted_lines = ['W-CRCK']
-        aggregated_layers = ['C-CRCK', 'C-HANG', 'C-REPR', 'E-METL', 'E-VEGT', 'W-CRCK', 'W-MRTR-BCKP', 'W-MRTR-FNSH',
-                             'W-STON-RESET', 'W-SURF-STAIN']
+        # aggregated_layers = ['C-CRCK', 'C-HANG', 'C-REPR', 'E-METL', 'E-VEGT', 'W-CRCK', 'W-MRTR-BCKP', 'W-MRTR-FNSH',
+        #                      'W-STON-RESET', 'W-SURF-STAIN']
         remove_layers = []  # 'boundBox'
         open_poly_layers = collections.defaultdict(int)
         none_layer = collections.defaultdict(int)
-        # todo: w-mrtr-fnsh-t2 see trello board (inverse of others)
-        # 17 is biogrowth on north
+
         # get all the polylines in each layer
         for lyr in layers:
             layer_objs = [x for x in all_objs if x.dxf.layer == lyr]
@@ -247,29 +246,33 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         _ = [layer_dict.pop(rm_file) for rm_file in remove_layers if rm_file in layer_dict]
         _ = [layers.remove(rm_file) for rm_file in remove_layers if rm_file in layers]
 
-        for agg in aggregated_layers:
-            same_name = []
-            # _ = [same_name.append(lyr) for lyr in layers if agg in lyr]
-            _ = [same_name.extend(layer_dict[lyr]) for lyr in layers if agg in lyr]
-            layer_dict[agg] = same_name
-            layers.append(agg)
+        # for agg in aggregated_layers:
+        #     same_name = []
+        #     # _ = [same_name.append(lyr) for lyr in layers if agg in lyr]
+        #     _ = [same_name.extend(layer_dict[lyr]) for lyr in layers if agg in lyr]
+        #     layer_dict[agg] = same_name
+        #     layers.append(agg)
 
         # pick random points and convert them to 3d
-        point_list = []
-        while len(point_list) < num_samples:
-            obj = np.random.uniform(min_max[0, 0], min_max[1, 0])
+        point_3d_list = []
+        point_2d_list = []
+        while len(point_3d_list) < num_samples:
+            x = np.random.uniform(min_max[0, 0], min_max[1, 0])
             y = np.random.uniform(min_max[0, 1], min_max[1, 1])
-            r = ch.embed([[obj, y]], allow_inexact=False)
+            r = ch.embed([[x, y]], allow_inexact=False)
             if r is None:
                 continue
             else:
-                point_list.append(r[0])
-        point_list = np.array(point_list)
+                point_3d_list.append(r[0])
+                point_2d_list.append([x, y])
+
+        point_3d_list = np.array(point_3d_list)
+        point_2d_list = np.array(point_2d_list)
 
         dist_mat = np.ones([num_samples, len(layer_dict.keys())], dtype=np.float) * np.Inf
 
         z_thresh = ch.bounds[2, 1] - ch.bounds[2, 0]
-        for i, r in tqdm(enumerate(point_list), total=len(point_list)):
+        for i, r in tqdm(enumerate(point_3d_list), total=len(point_3d_list)):
             for j, layer in enumerate(layer_dict.keys()):
                 mp = layer_dict[layer]
                 # mp_pts = points_from_mp(mp, ax=ax)
@@ -290,13 +293,13 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         # fig = plt.figure(figsize=(10, 6))
         # ax = [None]
         # ax[0] = fig.add_subplot(111, projection='3d')
-        # ax[0].scatter(point_list.T[0], point_list.T[1], point_list.T[2], s=20, c=point_facing.flatten(), vmin=-1, vmax=3)
+        # ax[0].scatter(point_3d_list.T[0], point_3d_list.T[1], point_3d_list.T[2], s=20, c=point_facing.flatten(), vmin=-1, vmax=3)
 
-        inside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 0])
+        inside_idx = np.argwhere(point_3d_list[:, 2] == ch.bounds[2, 0])
         point_facing[inside_idx] = (wall_position[inside_idx] + 2) % 4
-        outside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 1])
+        outside_idx = np.argwhere(point_3d_list[:, 2] == ch.bounds[2, 1])
         point_facing[outside_idx] = wall_position[outside_idx]
-        coping_idx = np.argwhere((point_list[:, 2] > ch.bounds[2, 0]) * (point_list[:, 2] < ch.bounds[2, 1]))
+        coping_idx = np.argwhere((point_3d_list[:, 2] > ch.bounds[2, 0]) * (point_3d_list[:, 2] < ch.bounds[2, 1]))
         point_facing[coping_idx] = -1
 
         # dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
@@ -304,9 +307,11 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         dist_df_single = pd.DataFrame.from_dict(dist_dict)
         dist_df_single.insert(0, 'wall_position', wall_position)
         dist_df_single.insert(0, 'point_facing', point_facing)
-        dist_df_single.insert(0, 'z', point_list[:, 2])
-        dist_df_single.insert(0, 'y', point_list[:, 1])
-        dist_df_single.insert(0, 'x', point_list[:, 0])
+        dist_df_single.insert(0, 'y_orig', point_2d_list[:, 1])
+        dist_df_single.insert(0, 'x_orig', point_2d_list[:, 0])
+        dist_df_single.insert(0, 'z', point_3d_list[:, 2])
+        dist_df_single.insert(0, 'y', point_3d_list[:, 1])
+        dist_df_single.insert(0, 'x', point_3d_list[:, 0])
 
         if dist_df is None:
             dist_df = dist_df_single
@@ -319,7 +324,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         dist_df[np.isnan(dist_df)] = np.Inf
 
         # discount manual w-mrtr-fnsh-t2
-        mrtr = np.zeros(dist_df['W-MRTR-FNSH-T2'].values.shape)
+        mrtr = np.zeros(num_samples)
         anti_mortar_layers = ['W-MRTR-BCKP', 'W-MRTR-FNSH-T1', 'W-MRTR-OPEN',
                               'W-STON-BULG-T2', 'W-STON-BULG-T3', 'W-STON-RESET',
                               'W-SURF-RENDR', 'boundBox_C']
@@ -409,15 +414,14 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     n_dist_mat_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
     X_train_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
 
-    # file1 = open(r"test.txt", "w+")
-    # text = []
     # iterating over all columns and storing feature importance (difference between benchmark and new model)
-    for col in X_train_df.columns:
+    for col in tqdm(X_train_df.columns, total=len(X_train_df.columns)):
         model_clone = clone(model)
         model_clone.random_state = random_state
-        model_clone.fit(X_train_df.drop(col, axis=1), y_train)
-        drop_col_score = model_clone.score(X_train_df.drop(col, axis=1), y_train)
-        importances.append(benchmark_score - drop_col_score)
+        col_data = X_train_df.drop(col, axis=1)
+        model_clone.fit(col_data, y_train)
+        drop_col_score = model_clone.score(col_data, y_train)
+        importances.append(drop_col_score - benchmark_score)
         # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
     importances_df = pd.DataFrame(importances, X_train_df.columns)
     ax = importances_df.plot.barh(rot=0, figsize=(12, 10))
@@ -435,11 +439,12 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     return importances_df
 
 
-def pred_locations(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
+def pred_locations_3d(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     # Z = rf.predict(X)
     Z = rf.predict_proba(X)[:, 1]  # rerun for pred (since just x, it doesnt use y (veggie))
     fig = plt.figure(figsize=(10, 6))
     ax = [None, None]
+    # todo: use boundbox outlines to mark top and bottom
     ax[0] = fig.add_subplot(211, projection='3d')
     ax[0].scatter(x_rand, y_rand, z_rand, s=20, c=Z, vmin=0, vmax=1)
     ax[0].set_title('Predicted wall for ' + certain_layer)
@@ -449,6 +454,22 @@ def pred_locations(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     ax[1].set_title('Ground truth for ' + certain_layer)
     file_name = str(certain_layer) + '_PredVsGround.pdf'
     fig.savefig(file_name)
+
+
+def pred_locations_2d(x_orig, y_orig, y, Z, certain_layer, use_diff=True, cmap='viridis'):
+    fig, ax = plt.subplots(3, 1, figsize=(10, 6))
+    # todo: use boundbox outlines to mark top and bottom
+    ax[0].scatter(x_orig, y_orig, s=20, c=Z, vmin=0, vmax=1, cmap=cmap)
+    ax[0].set_title('Predicted wall for ' + certain_layer)
+    #
+    ax[1].scatter(x_orig, y_orig, s=20, c=y-Z, vmin=-1, vmax=1, cmap=cmap)
+    ax[1].set_title('Difference in walls for ' + certain_layer)
+    # compare to ground truth
+    ax[2].scatter(x_orig, y_orig, s=20, c=y, vmin=0, vmax=1, cmap=cmap)
+    ax[2].set_title('Ground truth for ' + certain_layer)
+    file_name = str(certain_layer) + '_PredVsGround.pdf'
+    fig.savefig(file_name)
+    return fig
 
 
 def compute_distances(num_samples=1000):
@@ -473,38 +494,75 @@ def compute_distances(num_samples=1000):
 
 
 def run_model(thresh=10):
+    independent_layers = ['X', 'Y', 'Z', 'X_ORIG', 'Y_ORIG', 'POINT_FACING', 'WALL_POSITION', 'E-METL-T2',
+                          'E-METL-T4', 'W-STON-HOLE', 'BOUNDBOX_C', 'BOUNDBOX_I', 'BOUNDBOX_O',
+                          'GRASS', 'SIDEWALK', 'TREE', 'C-HANG', 'C-HANG-5', 'C-HANG-7']
+
+    prohibited_layers = ['W-STON-DELM', 'W-STON-STRAT', 'E-METL-T3', 'W-STON-RESET-T4',
+                         '0', '0-TIFF', 'A-ANNO-COLCTR', 'A-ANNO-COLNO', 'A-ANNO-CUTLINE', 'A-',
+                         'A-ANNO-', 'DEFPOINTS']
+
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
     # read them all back out and merge
     pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
     all_df = [pd.read_pickle(pf) for pf in pkl_files]
     dist_df = all_df.pop()
+    dist_df.columns = [x.upper() for x in dist_df.columns]
     for df in all_df:
+        df.columns = [x.upper() for x in df.columns]
         df.index += len(dist_df)
         dist_df = pd.merge(left=dist_df, right=df, how='outer')
     layers = sorted(dist_df.columns)
     dist_df[np.isnan(dist_df)] = np.Inf
 
-    for certainLayer in tqdm(layers, total=len(layers)):
+    # new agg code, create hierarchical categories split at dash
+    h_layers = []
+    for lyr in layers:
+        these = []
+        segments = lyr.split('-')
+        for i, s in enumerate(segments):
+            these.append('-'.join(segments[:i]+[s]) + '-')
+        h_layers += these[:-1]
+    h_layers = sorted(set(h_layers))
+    # use the minimum from all matching columns
+    for hl in h_layers:
+        matches = [x for x in layers if hl in x]
+        if len(matches) < 2:
+            continue
+        agg_dist = np.vstack([dist_df[m] for m in matches])
+        lyr_dist = np.min(agg_dist, axis=0)
+        dist_df[hl] = lyr_dist
+
+    # remove these, they are from old data
+    aggregated_layers = ['C-CRCK', 'C-HANG', 'C-REPR', 'E-METL', 'E-VEGT', 'W-CRCK', 'W-MRTR-BCKP', 'W-MRTR-FNSH',
+                         'W-STON-RESET', 'W-SURF-STAIN']
+    for al in aggregated_layers:
+        if al in dist_df.columns:
+            del dist_df[al]
+    layers = sorted(dist_df.columns)
+
+    # for each index in wall position. find max x.y.z and put that at 0,0,0
+    for wall_pos in range(4):
+        wall_idx = dist_df['WALL_POSITION'] == wall_pos
+        for dim in ['X', 'Y', 'Z', 'X_ORIG', 'Y_ORIG']:
+            this_dim = dist_df[dim][wall_idx]
+            dist_df[dim][wall_idx] -= this_dim.max()
+
+    predicted_layers = ['W-SURF-GYP', 'W-STON-']
+    # predicted_layers = [l for l in layers if l not in independent_layers]
+    for certainLayer in tqdm(predicted_layers, total=len(predicted_layers)):
         # to get index of certain layer
-        prohibited_layers = ['0', certainLayer, 'W-STON-DELM', 'W-STON-STRAT', 'E-METL-T3', 'W-STON-RESET-T4']
         layer_order = sorted(dist_df.keys())
-        n_dist_mat = np.array([dist_df[k].values for k in layer_order if k not in prohibited_layers])
-        # new_layers = layers
-        new_layers = [k for k in layer_order if k not in prohibited_layers]
+        new_layers = [l for l in layer_order if l not in prohibited_layers and l not in certainLayer]
+        n_dist_mat = np.array([dist_df[k].values for k in new_layers])
 
         rand_column = np.random.randint(2, size=n_dist_mat.shape[1])
         n_dist_mat = np.vstack([n_dist_mat, rand_column])
 
         X = n_dist_mat.transpose()
-        y = dist_df[certainLayer].values <= thresh
-
-        # # transform to (0, 1)
-        # n_dist_mat = np.exp(-n_dist_mat/1e3)
-
-        x_rand = np.array(dist_df['x'])
-        y_rand = np.array(dist_df['y'])
-        z_rand = np.array(dist_df['z'])
         X[np.isinf(X)] = 1e12
+
+        y = dist_df[certainLayer].values <= thresh
 
         # set aside some data for testing the model later
         test_fraction = 0.25
@@ -531,15 +589,28 @@ def run_model(thresh=10):
         #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], new_layers[idx[x]]))
         #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], new_layers[x]))
 
+        # todo: confusion matrix for predictions
+
         # figure out important features
-        drop_col_feat_imp(rf, X, y, certainLayer, new_layers)
+        # reduce data volume for faster evaluation
+        train_fraction = 1
+        train_number = int(train_fraction * X.shape[0])
+        train_idx = np.random.choice(X.shape[0], train_number, replace=False)
+        train_mat = np.zeros(X.shape[0], dtype=np.bool)
+        train_mat[train_idx] = True
+        importances = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certainLayer, new_layers)
+        importances.to_pickle(os.path.join(cad_path, '%s_feat.pkl' % certainLayer))
 
         # make predictions and plot them
-        pred_locations(x_rand, y_rand, z_rand, rf, X, y, certainLayer)
+        x_orig = dist_df['X_ORIG']
+        y_orig = dist_df['Y_ORIG']
+        Z = rf.predict_proba(X)[:, 1]
+        pred_locations_2d(x_orig, y_orig, y, Z, certainLayer,
+                          use_diff=True, cmap='RdBu_r')
 
 def main():
-    compute_distances(num_samples=1000)
-
+    #compute_distances(num_samples=1000)
+    run_model(thresh=10)
 
 if __name__ == '__main__':
     main()
