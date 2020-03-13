@@ -14,6 +14,8 @@ import seaborn as sns
 from sklearn.base import clone
 from scipy.spatial import distance
 import collections
+import os
+import glob
 
 
 def make_spatial_weights(r):
@@ -176,6 +178,8 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
 
         split_circ_poly = ['W-CRCK']
         accepted_lines = ['W-CRCK']
+        aggregated_layers = ['C-CRCK', 'C-HANG', 'C-REPR', 'E-METL', 'E-VEGT', 'W-CRCK', 'W-MRTR-BCKP', 'W-MRTR-FNSH',
+                             'W-STON-RESET', 'W-SURF-STAIN']
         remove_layers = []  # 'boundBox'
         open_poly_layers = collections.defaultdict(int)
         none_layer = collections.defaultdict(int)
@@ -187,12 +191,16 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
             # 0 is lwpoly and 40 is circle
             poly_list = {'CIRC': [], 'POLY': []}
             for idx, obj in enumerate(layer_objs):
-                if obj.dxftype() == 'CIRCLE':
+                if obj.dxftype() == 'LINE':
+                    continue
+                elif obj.dxftype() == 'CIRCLE':
                     center = obj.dxf.center
                     radius = obj.dxf.radius
                     points = points_in_circle_np(radius, center[0], center[1])
                 elif 'get_points' in dir(obj):
                     points = np.array([y for y in obj.get_points()])[:, :2]
+                    if len(points) < 3:
+                        continue
                 else:
                     # print('Problem reading points from %d in layer %s' % (idx, lyr))
                     continue
@@ -239,6 +247,13 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         _ = [layer_dict.pop(rm_file) for rm_file in remove_layers if rm_file in layer_dict]
         _ = [layers.remove(rm_file) for rm_file in remove_layers if rm_file in layers]
 
+        for agg in aggregated_layers:
+            same_name = []
+            # _ = [same_name.append(lyr) for lyr in layers if agg in lyr]
+            _ = [same_name.extend(layer_dict[lyr]) for lyr in layers if agg in lyr]
+            layer_dict[agg] = same_name
+            layers.append(agg)
+
         # pick random points and convert them to 3d
         point_list = []
         while len(point_list) < num_samples:
@@ -277,7 +292,6 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         # ax[0] = fig.add_subplot(111, projection='3d')
         # ax[0].scatter(point_list.T[0], point_list.T[1], point_list.T[2], s=20, c=point_facing.flatten(), vmin=-1, vmax=3)
 
-        # todo: fix inside vs outside
         inside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 0])
         point_facing[inside_idx] = (wall_position[inside_idx] + 2) % 4
         outside_idx = np.argwhere(point_list[:, 2] == ch.bounds[2, 1])
@@ -285,7 +299,8 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         coping_idx = np.argwhere((point_list[:, 2] > ch.bounds[2, 0]) * (point_list[:, 2] < ch.bounds[2, 1]))
         point_facing[coping_idx] = -1
 
-        dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
+        # dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layers)}
+        dist_dict = {layer: dist_mat[:, j] for j, layer in enumerate(layer_dict.keys())}
         dist_df_single = pd.DataFrame.from_dict(dist_dict)
         dist_df_single.insert(0, 'wall_position', wall_position)
         dist_df_single.insert(0, 'point_facing', point_facing)
@@ -296,11 +311,27 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         if dist_df is None:
             dist_df = dist_df_single
         else:
-            # dist_df = pd.merge(left=dist_df, right=dist_df_single, how='outer')
-            dist_df = pd.merge(left=dist_df, right=dist_df_single, how='inner')
+            dist_df_single.index += len(dist_df)
+            dist_df = pd.merge(left=dist_df, right=dist_df_single, how='outer')  # keep all columns
+            # dist_df = pd.merge(left=dist_df, right=dist_df_single, how='inner')  # keep only common columns
 
         # remove NaNs from final data frame
         dist_df[np.isnan(dist_df)] = np.Inf
+
+        # discount manual w-mrtr-fnsh-t2
+        mrtr = np.zeros(dist_df['W-MRTR-FNSH-T2'].values.shape)
+        anti_mortar_layers = ['W-MRTR-BCKP', 'W-MRTR-FNSH-T1', 'W-MRTR-OPEN',
+                              'W-STON-BULG-T2', 'W-STON-BULG-T3', 'W-STON-RESET',
+                              'W-SURF-RENDR', 'boundBox_C']
+        for i in range(len(mrtr)):
+            # if its not 0 in any of those layers and it is not in the coping, then it is this
+            is_anti = 1
+            for nlyr in anti_mortar_layers:
+                if nlyr not in dist_df.columns:
+                    continue
+                is_anti *= dist_df[nlyr][i]
+            mrtr[i] = float(is_anti > 0)
+        dist_df['W-MRTR-FNSH-T2'] = mrtr
 
         # visualize results
         # fig, ax = plt.subplots(1, 1, fig_size=(10, 4))
@@ -420,14 +451,38 @@ def pred_locations(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     fig.savefig(file_name)
 
 
-def main(thresh=10):
+def compute_distances(num_samples=1000):
     # read the cad file
-    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_2_7_files/CAD_Progress/"
-    walls = [r'2020 03 11 - et - DRAFT West Wall_BN.dxf', r'2020 03 11 - et - DRAFT North Wall_BN.dxf',
-             r'2020 03 11 - et - DRAFT South Wall_BN.dxf', r'2020 03 11 - et - DRAFT East Wall_BN.dxf']
+    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
+    walls = [r'2020-03-11 - et - DRAFT West Wall_BN.dxf', r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT South Wall_BN.dxf', r'2020-03-11 - et - DRAFT East Wall_BN.dxf']
     cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
-    dist_df = get_data(cad_files, num_samples=1000)
-    layers = dist_df.columns
+
+    for cf in cad_files:
+        # compute the distances
+        dist_df = get_data([cf], num_samples)
+
+        # save the distances
+        pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+        pkl_idx = sorted([int(x.split('/')[-1].split('_')[1].replace('.pkl', '')) for x in pkl_files])
+        if len(pkl_idx) == 0:
+            idx = 0
+        else:
+            idx = pkl_idx[-1] + 1
+        dist_df.to_pickle(os.path.join(cad_path, 'dists_%05d.pkl' % idx))
+
+
+def run_model(thresh=10):
+    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
+    # read them all back out and merge
+    pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+    all_df = [pd.read_pickle(pf) for pf in pkl_files]
+    dist_df = all_df.pop()
+    for df in all_df:
+        df.index += len(dist_df)
+        dist_df = pd.merge(left=dist_df, right=df, how='outer')
+    layers = sorted(dist_df.columns)
+    dist_df[np.isnan(dist_df)] = np.Inf
 
     for certainLayer in tqdm(layers, total=len(layers)):
         # to get index of certain layer
@@ -481,6 +536,9 @@ def main(thresh=10):
 
         # make predictions and plot them
         pred_locations(x_rand, y_rand, z_rand, rf, X, y, certainLayer)
+
+def main():
+    compute_distances(num_samples=1000)
 
 
 if __name__ == '__main__':
