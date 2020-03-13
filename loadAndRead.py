@@ -246,13 +246,6 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         _ = [layer_dict.pop(rm_file) for rm_file in remove_layers if rm_file in layer_dict]
         _ = [layers.remove(rm_file) for rm_file in remove_layers if rm_file in layers]
 
-        # for agg in aggregated_layers:
-        #     same_name = []
-        #     # _ = [same_name.append(lyr) for lyr in layers if agg in lyr]
-        #     _ = [same_name.extend(layer_dict[lyr]) for lyr in layers if agg in lyr]
-        #     layer_dict[agg] = same_name
-        #     layers.append(agg)
-
         # pick random points and convert them to 3d
         point_3d_list = []
         point_2d_list = []
@@ -289,11 +282,6 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
                     if rd == 0:
                         break
                 dist_mat[i, j] = np.min(r_dists)
-
-        # fig = plt.figure(figsize=(10, 6))
-        # ax = [None]
-        # ax[0] = fig.add_subplot(111, projection='3d')
-        # ax[0].scatter(point_3d_list.T[0], point_3d_list.T[1], point_3d_list.T[2], s=20, c=point_facing.flatten(), vmin=-1, vmax=3)
 
         inside_idx = np.argwhere(point_3d_list[:, 2] == ch.bounds[2, 0])
         point_facing[inside_idx] = (wall_position[inside_idx] + 2) % 4
@@ -345,7 +333,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         # ax.set_ylim(min_max[:, 1])
         # ax.set_aspect('equal')
 
-        return dist_df
+        return layer_dict, dist_df
 
 
 def specific_combine(dist_df, new_layers):
@@ -400,6 +388,17 @@ def cross_corr(dist_df, num_vars=5):
                       square=True, cmap=colormap, linecolor='white', annot=True)
 
 
+def autolabel(rects):
+    """Attach a text label above each bar in *rects*, displaying its height."""
+    for rect in rects:
+        height = rect.get_height()
+        ax.annotate('{}'.format(height),
+                    xy=(rect.get_x() + rect.get_width() / 2, height),
+                    xytext=(0, 3),  # 3 points vertical offset
+                    textcoords="offset points",
+                    ha='center', va='bottom')
+
+
 def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random_state=42):
     # clone the model to have the exact same specification as the one initially trained
     model_clone = clone(model)
@@ -421,9 +420,10 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
         col_data = X_train_df.drop(col, axis=1)
         model_clone.fit(col_data, y_train)
         drop_col_score = model_clone.score(col_data, y_train)
-        importances.append(drop_col_score - benchmark_score)
+        importances.append(benchmark_score - drop_col_score)
         # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
     importances_df = pd.DataFrame(importances, X_train_df.columns)
+    # todo fig size based on columns
     ax = importances_df.plot.barh(rot=0, figsize=(12, 10))
     fig = ax.get_figure()
     plt.show(block=False)
@@ -431,6 +431,9 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
     ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
     plt.close(fig)
+    # todo only fill in if greater than random
+    # todo name text color changes too if greater than random
+    # autolabel(rects)
     file_name = str(certain_layer) + '.pdf'
     ax.figure.savefig(file_name)
 
@@ -444,7 +447,6 @@ def pred_locations_3d(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     Z = rf.predict_proba(X)[:, 1]  # rerun for pred (since just x, it doesnt use y (veggie))
     fig = plt.figure(figsize=(10, 6))
     ax = [None, None]
-    # todo: use boundbox outlines to mark top and bottom
     ax[0] = fig.add_subplot(211, projection='3d')
     ax[0].scatter(x_rand, y_rand, z_rand, s=20, c=Z, vmin=0, vmax=1)
     ax[0].set_title('Predicted wall for ' + certain_layer)
@@ -456,53 +458,87 @@ def pred_locations_3d(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     fig.savefig(file_name)
 
 
-def pred_locations_2d(x_orig, y_orig, y, Z, certain_layer, use_diff=True, cmap='viridis'):
+def pred_locations_2d(x_orig, y_orig, y, Z, certain_layer, bboxes,
+                      cmap='RdBu_r', ms=1, lw=0.5):
     fig, ax = plt.subplots(3, 1, figsize=(10, 6))
-    # todo: use boundbox outlines to mark top and bottom
-    ax[0].scatter(x_orig, y_orig, s=20, c=Z, vmin=0, vmax=1, cmap=cmap)
-    ax[0].set_title('Predicted wall for ' + certain_layer)
+    a = ax[0]
+    a.scatter(x_orig, y_orig, s=ms, c=Z, vmin=0, vmax=1, cmap=cmap)
+    for bb in bboxes:
+        a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
+    # a.set_title('Predicted wall for ' + certain_layer)
+    a.set_aspect('equal')
     #
-    ax[1].scatter(x_orig, y_orig, s=20, c=y-Z, vmin=-1, vmax=1, cmap=cmap)
-    ax[1].set_title('Difference in walls for ' + certain_layer)
+    a = ax[1]
+    a.scatter(x_orig, y_orig, s=ms, c=y-Z, vmin=-1, vmax=1, cmap=cmap)
+    for bb in bboxes:
+        a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
+    # a.set_title('Difference in walls for ' + certain_layer)
+    a.set_aspect('equal')
     # compare to ground truth
-    ax[2].scatter(x_orig, y_orig, s=20, c=y, vmin=0, vmax=1, cmap=cmap)
-    ax[2].set_title('Ground truth for ' + certain_layer)
-    file_name = str(certain_layer) + '_PredVsGround.pdf'
-    fig.savefig(file_name)
+    a = ax[2]
+    a.scatter(x_orig, y_orig, s=ms, c=y, vmin=0, vmax=1, cmap=cmap)
+    for bb in bboxes:
+        a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
+    # a.set_title('Ground truth for ' + certain_layer)
+    a.set_aspect('equal')
+
     return fig
 
 
 def compute_distances(num_samples=1000):
     # read the cad file
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
-    walls = [r'2020-03-11 - et - DRAFT West Wall_BN.dxf', r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
-             r'2020-03-11 - et - DRAFT South Wall_BN.dxf', r'2020-03-11 - et - DRAFT East Wall_BN.dxf']
+    walls = [r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT East Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT South Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT West Wall_BN.dxf']
     cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
 
-    for cf in cad_files:
-        # compute the distances
-        dist_df = get_data([cf], num_samples)
+    for inst in range(10):
+        for cf in cad_files:
+            # compute the distances
+            layer_dict, dist_df = get_data([cf], num_samples)
 
-        # save the distances
-        pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
-        pkl_idx = sorted([int(x.split('/')[-1].split('_')[1].replace('.pkl', '')) for x in pkl_files])
-        if len(pkl_idx) == 0:
-            idx = 0
-        else:
-            idx = pkl_idx[-1] + 1
-        dist_df.to_pickle(os.path.join(cad_path, 'dists_%05d.pkl' % idx))
+            # save the distances
+            pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+            pkl_idx = sorted([int(x.split('/')[-1].split('_')[1].replace('.pkl', '')) for x in pkl_files])
+            if len(pkl_idx) == 0:
+                idx = 0
+            else:
+                idx = pkl_idx[-1] + 1
+            dist_df.to_pickle(os.path.join(cad_path, 'dists_%05d.pkl' % idx))
 
 
 def run_model(thresh=10):
-    independent_layers = ['X', 'Y', 'Z', 'X_ORIG', 'Y_ORIG', 'POINT_FACING', 'WALL_POSITION', 'E-METL-T2',
+    independent_layers = ['X', 'Y', 'Z', 'POINT_FACING', 'WALL_POSITION', 'E-METL-T2',
                           'E-METL-T4', 'W-STON-HOLE', 'BOUNDBOX_C', 'BOUNDBOX_I', 'BOUNDBOX_O',
                           'GRASS', 'SIDEWALK', 'TREE', 'C-HANG', 'C-HANG-5', 'C-HANG-7']
 
     prohibited_layers = ['W-STON-DELM', 'W-STON-STRAT', 'E-METL-T3', 'W-STON-RESET-T4',
                          '0', '0-TIFF', 'A-ANNO-COLCTR', 'A-ANNO-COLNO', 'A-ANNO-CUTLINE', 'A-',
-                         'A-ANNO-', 'DEFPOINTS']
+                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG']
 
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
+    walls = [r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT East Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT South Wall_BN.dxf',
+             r'2020-03-11 - et - DRAFT West Wall_BN.dxf']
+    directions = {0: 'North', 1: 'East', 2: 'South', 3: 'West'}
+    cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
+
+    # read the bounding boxes from cad files
+    bbox = []
+    for file in cad_files:
+        doc = ezdxf.readfile(file)
+        # record all entities in model space
+        msp = doc.modelspace()
+        objs = [e for e in msp if 'boundBox' in e.dxf.layer]
+        pts = [np.array([y[:2] for y in x.get_points()]) for x in objs]
+        for i, pt in enumerate(pts):
+            if not np.all(pt[-1] == pt[0]):
+                pts[i] = np.vstack([pt, pt[0]])
+        bbox.append(pts)
+
     # read them all back out and merge
     pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
     all_df = [pd.read_pickle(pf) for pf in pkl_files]
@@ -539,12 +575,11 @@ def run_model(thresh=10):
     for al in aggregated_layers:
         if al in dist_df.columns:
             del dist_df[al]
-    layers = sorted(dist_df.columns)
 
     # for each index in wall position. find max x.y.z and put that at 0,0,0
     for wall_pos in range(4):
         wall_idx = dist_df['WALL_POSITION'] == wall_pos
-        for dim in ['X', 'Y', 'Z', 'X_ORIG', 'Y_ORIG']:
+        for dim in ['X', 'Y', 'Z']:  # , 'X_ORIG', 'Y_ORIG']:
             this_dim = dist_df[dim][wall_idx]
             dist_df[dim][wall_idx] -= this_dim.max()
 
@@ -582,8 +617,8 @@ def run_model(thresh=10):
         rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
 
         # eval model on test data
-        # print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
-        # print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
+        print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
+        print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
         # print('layer contribution to RF in descending order:')
         # for x in np.argsort(rf.feature_importances_)[::-1]:
         #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], new_layers[idx[x]]))
@@ -605,8 +640,16 @@ def run_model(thresh=10):
         x_orig = dist_df['X_ORIG']
         y_orig = dist_df['Y_ORIG']
         Z = rf.predict_proba(X)[:, 1]
-        pred_locations_2d(x_orig, y_orig, y, Z, certainLayer,
-                          use_diff=True, cmap='RdBu_r')
+        #
+        for w in range(4):
+            w_idx = dist_df['WALL_POSITION'] == w
+            fig = pred_locations_2d(x_orig[w_idx], y_orig[w_idx], y[w_idx], Z[w_idx],
+                                    certainLayer, bbox[w], cmap='RdBu_r', ms=1, lw=0.5)
+            fig_name = '%s_%s_Wall.pdf' % (certainLayer, directions[w])
+            fig.savefig(os.path.join(cad_path, fig_name))
+            plt.close(fig)
+
+
 
 def main():
     #compute_distances(num_samples=1000)
