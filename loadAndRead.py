@@ -147,7 +147,6 @@ def show_layer_points(poly_list):
             plt.plot(x, y)
 
 
-# when you return a bunch of things, should be class; for now funct
 def get_data(cad_files, num_samples=1000):  # cadFile is complete path
     dist_df = None
     for file in cad_files:
@@ -386,7 +385,7 @@ def importance_corr(dist_df, certainLayer, importances_df):
     colormap = plt.cm.RdBu_r
     mask = np.zeros_like(xcorr)
     mask[np.triu_indices_from(mask)] = True
-    fig, ax = plt.subplots(1, 1, figsize=(4, len(loc_dist_df.columns)/5))
+    fig, ax = plt.subplots(1, 1, figsize=(4, max(4, len(loc_dist_df.columns) / 5)))
     # annot = importances_df.T[columns[1:]].T
     subax = sns.heatmap(xcorr[[certainLayer]][1:], ax=ax,
                         linewidths=0.1, vmin=-1.0, vmax=1.0,
@@ -397,54 +396,34 @@ def importance_corr(dist_df, certainLayer, importances_df):
     return fig
 
 
-def cross_corr(dist_df, prohibited_layers=[]):
-    valid_cols = [l for l in dist_df.columns if l not in prohibited_layers]
-    loc_dist_df = dist_df[valid_cols]
-
-    whole_corr = loc_dist_df.corr()
-
+def cross_corr(dist_df, cad_path, prohibited_layers=[]):
     h_layers = []
-    for lyr in loc_dist_df.columns:
+    for lyr in dist_df.columns:
         these = []
         segments = lyr.split('-')
         for i, s in enumerate(segments):
             these.append('-'.join(segments[:i] + [s]) + '-')
         h_layers += these[:-1]
     h_layers = sorted(set(h_layers))
-    # use the minimum from all matching columns
-    for hl in h_layers:
-        matches = [x for x in loc_dist_df.columns if hl in x]
-        if len(matches) < 2:
-            continue
-        # agg_dist = np.vstack([dist_df[m] for m in matches])
-        # lyr_dist = np.min(agg_dist, axis=0)
-        dist_df[hl] = 0
+    valid_cols = [l for l in dist_df.columns if l not in prohibited_layers and l not in h_layers]
+    loc_dist_df = dist_df[sorted(valid_cols)]
 
-    # this is all fine
+    whole_corr = loc_dist_df.corr()
     colormap = plt.cm.RdBu_r
-    mask = np.zeros_like( loc_dist_df.corr())
+    mask = np.zeros_like(loc_dist_df.corr())
     mask[np.triu_indices_from(mask)] = True
-    svm_plot = sns.heatmap(whole_corr, mask=mask, vmin=-1.0, vmax=1.0,
-                      square=True, cmap=colormap, linecolor='k',linewidths=0.3,
-                      annot=False, yticklabels=True, xticklabels=True)
-    fig = svm_plot.get_figure()
-    svm_plot
+    wh = len(valid_cols) / 5
+    fig, ax = plt.subplots(1, 1, figsize=(wh, wh))
+    svm_plot = sns.heatmap(whole_corr, mask=mask, vmin=-1.0, vmax=1.0, ax=ax,
+                           square=True, cmap=colormap, linecolor='k', linewidths=0.3,
+                           annot=False, yticklabels=True, xticklabels=True)
     fig.tight_layout()
-    fig.savefig('whole_correlation.png')
+    fig.savefig(cad_path +'whole_correlation.pdf')
+    plt.close(fig)
     return fig
 
-# todo remove if i am not using this
-def autolabel(rects):
-    """Attach a text label above each bar in *rects*, displaying its height."""
-    for rect in rects:
-        height = rect.get_height()
-        ax.annotate('{}'.format(height),
-                    xy=(rect.get_x() + rect.get_width() / 2, height),
-                    xytext=(0, 3),  # 3 points vertical offset
-                    textcoords="offset points",
-                    ha='center', va='bottom')
 
-def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random_state=42):
+def drop_col_feat_imp(model, X_train, y_train, certain_layer, cad_path, new_layers, random_state=42):
     # clone the model to have the exact same specification as the one initially trained
     model_clone = clone(model)
     # set random_state for comparability
@@ -455,7 +434,7 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     # list for storing feature importance
     importances = []
 
-    n_dist_mat_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
+    # n_dist_mat_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
     X_train_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
 
     # iterating over all columns and storing feature importance (difference between benchmark and new model)
@@ -468,31 +447,18 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
         importances.append(benchmark_score - drop_col_score)
         # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
     importances_df = pd.DataFrame(importances, X_train_df.columns)
-    # todo fig size based on rows
-    fig_height = importances_df.shape[0]/5
-    ax = importances_df.plot.barh(rot=0, figsize=(8, fig_height), grid=True)
+    fig_title = str(certain_layer) + ' feature importance'
+    fig_height = importances_df.shape[0] / 5
+    ax = importances_df.plot.barh(rot=0, figsize=(8, fig_height), grid=True, title=fig_title)
     fig = ax.get_figure()
     fig.tight_layout()
     plt.show(block=False)
     rand_mag = np.abs(importances_df.values[-1])
     ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
     ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
-    # fig, ax = plt.subplots()
-    # rects = ax.bar(importances_df, rot=0, figsize=(18, 10))
-    # autolabel(rects)
-    # rand_mag = np.abs(importances_df.values[-1])
-    # ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
-    # ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
-    # plt.show()
     plt.close(fig)
-    # todo make a dataframe with only the ones more important than random
-    # todo only fill in with color if greater than random
-    # todo name text color changes too if greater than random
-    file_name = str(certain_layer) + '.pdf'
+    file_name = cad_path + str(certain_layer) + ' feature-importance.pdf'
     ax.figure.savefig(file_name)
-
-    # todo run cross corr on the ones more important than random
-
     return importances_df
 
 
@@ -524,7 +490,7 @@ def pred_locations_2d(x_orig, y_orig, y, Z,
     a.set_aspect('equal')
     #
     a = ax[1]
-    a.scatter(x_orig, y_orig, s=ms, c=y-Z, vmin=-1, vmax=1, cmap=cmap)
+    a.scatter(x_orig, y_orig, s=ms, c=y - Z, vmin=-1, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
     a.set_title('Difference in %s wall for %s' % (wall_name, certain_layer))
@@ -540,16 +506,16 @@ def pred_locations_2d(x_orig, y_orig, y, Z,
     return fig
 
 
-def compute_distances(num_samples=1000):
+def compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
     # read the cad file
-    cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
-    walls = [r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
-             r'2020-03-11 - et - DRAFT East Wall_BN.dxf',
-             r'2020-03-11 - et - DRAFT South Wall_BN.dxf',
-             r'2020-03-11 - et - DRAFT West Wall_BN.dxf']
-    cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
+    # cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
+    # walls = [r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
+    #          r'2020-03-11 - et - DRAFT East Wall_BN.dxf',
+    #          r'2020-03-11 - et - DRAFT South Wall_BN.dxf',
+    #          r'2020-03-11 - et - DRAFT West Wall_BN.dxf']
+    # cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
 
-    for inst in range(10):
+    for batch in range(num_batches):
         for cf in cad_files:
             # compute the distances
             layer_dict, dist_df = get_data([cf], num_samples)
@@ -569,9 +535,9 @@ def run_model(thresh=10):
                           'E-METL-T4', 'W-STON-HOLE', 'BOUNDBOX_C', 'BOUNDBOX_I', 'BOUNDBOX_O',
                           'GRASS', 'SIDEWALK', 'TREE', 'C-HANG', 'C-HANG-5', 'C-HANG-7']
 
-    prohibited_layers = ['W-STON-DELM', 'W-STON-STRAT', 'E-METL-T3', 'W-STON-RESET-T4',
+    prohibited_layers = ['W-STON-DELAM', 'W-STON-STRAT-T1', 'E-METL-T3', 'W-STON-RESET-T4',
                          '0', '0-TIFF', 'A-ANNO-COLCTR', 'A-ANNO-COLNO', 'A-ANNO-CUTLINE', 'A-',
-                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG']
+                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG', 'W-STON-STRAT-T2']
 
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
     walls = [r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
@@ -580,6 +546,17 @@ def run_model(thresh=10):
              r'2020-03-11 - et - DRAFT West Wall_BN.dxf']
     directions = {0: 'North', 1: 'East', 2: 'South', 3: 'West'}
     cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
+
+    pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+    all_df = [pd.read_pickle(pf) for pf in pkl_files]
+    dist_df = all_df.pop()
+    dist_df.columns = [x.upper() for x in dist_df.columns]
+    for df in all_df:
+        df.columns = [x.upper() for x in df.columns]
+        df.index += len(dist_df)
+        dist_df = pd.merge(left=dist_df, right=df, how='outer')
+    layers = sorted(dist_df.columns)
+    dist_df[np.isnan(dist_df)] = np.Inf
 
     # read the bounding boxes from cad files
     bbox = []
@@ -594,25 +571,13 @@ def run_model(thresh=10):
                 pts[i] = np.vstack([pt, pt[0]])
         bbox.append(pts)
 
-    # read them all back out and merge
-    pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
-    all_df = [pd.read_pickle(pf) for pf in pkl_files]
-    dist_df = all_df.pop()
-    dist_df.columns = [x.upper() for x in dist_df.columns]
-    for df in all_df:
-        df.columns = [x.upper() for x in df.columns]
-        df.index += len(dist_df)
-        dist_df = pd.merge(left=dist_df, right=df, how='outer')
-    layers = sorted(dist_df.columns)
-    dist_df[np.isnan(dist_df)] = np.Inf
-
     # new agg code, create hierarchical categories split at dash
     h_layers = []
     for lyr in layers:
         these = []
         segments = lyr.split('-')
         for i, s in enumerate(segments):
-            these.append('-'.join(segments[:i]+[s]) + '-')
+            these.append('-'.join(segments[:i] + [s]) + '-')
         h_layers += these[:-1]
     h_layers = sorted(set(h_layers))
     # use the minimum from all matching columns
@@ -638,12 +603,15 @@ def run_model(thresh=10):
             this_dim = dist_df[dim][wall_idx]
             dist_df[dim][wall_idx] -= this_dim.max()
 
-    fig = cross_corr(dist_df, prohibited_layers, independent_layers)
-    fig_name = os.path.join(cad_path, 'Correlation.pdf')
-    fig.savefig(fig_name)
-    plt.close(fig)
+    fig = cross_corr(dist_df, cad_path, prohibited_layers)
 
-    predicted_layers = ['W-SURF-GYP', 'W-STON-']
+    # $$$ CHANGE THESE FOR WHAT YOU ARE INTERESTED IN $$$
+    predicted_layers = ['W-SURF-GYP']
+        # , 'W-STON-', 'C-REPR-T1',
+        #                 'C-REPR-T2', 'C-REPR-T3', 'C-REPR-T4'
+        #                 'C-REPR-T5', 'C-REPR-T6', 'C-SPALL',
+        #                 'E-VEGT-BIOGRW','E-VEGT-GROWIES',
+        #                 'W-CRCK-POLY', 'W-CRCK-CIRC']
     # predicted_layers = [l for l in layers if l not in independent_layers]
     for certainLayer in tqdm(predicted_layers, total=len(predicted_layers)):
         # to get index of certain layer
@@ -694,7 +662,7 @@ def run_model(thresh=10):
         train_idx = np.random.choice(X.shape[0], train_number, replace=False)
         train_mat = np.zeros(X.shape[0], dtype=np.bool)
         train_mat[train_idx] = True
-        importances_df = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certainLayer, new_layers)
+        importances_df = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certainLayer, cad_path, new_layers)
         importances_df.to_pickle(os.path.join(cad_path, '%s_feat.pkl' % certainLayer))
 
         fig = importance_corr(dist_df, certainLayer, importances_df)
@@ -717,12 +685,14 @@ def run_model(thresh=10):
 
 
 
+
+
 def main():
-    #compute_distances(num_samples=1000)
+    compute_distances(cad_files, cad_path, num_samples=1000, num_batches=10)
     run_model(thresh=10)
 
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()
 
 # # regular fa
 # fa = FactorAnalyzer()
