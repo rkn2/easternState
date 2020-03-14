@@ -374,20 +374,66 @@ def specific_combine(dist_df, new_layers):
     return n_dist_mat, new_layers
 
 
-def cross_corr(dist_df, num_vars=5):
-    new_dist_df = dist_df[['E-VEGT-GROWIES', 'E-VEGT-BIOGRW', 'y', 'C-CRCK', 'W-SURF-STAIN-T1']]
-    new_dist_df.corr()
-    colormap = plt.cm.RdBu
-    plt.figure(figsize=(15, 10))
-    # plt.title(u'6 hours', y=1.05, size=16)
-
-    mask = np.zeros_like(new_dist_df.corr())
+def importance_corr(dist_df, certainLayer, importances_df):
+    #
+    valid = importances_df > np.abs(importances_df.T['random'][0])
+    valid_cols = [c for c in valid.T.columns if valid.T[c][0]]
+    valid_imp = [importances_df[0][c] for c in valid_cols]
+    columns = [certainLayer] + [valid_cols[x] for x in np.argsort(valid_imp)[::-1]]
+    loc_dist_df = dist_df[columns]
+    #
+    xcorr = loc_dist_df.corr()
+    colormap = plt.cm.RdBu_r
+    mask = np.zeros_like(xcorr)
     mask[np.triu_indices_from(mask)] = True
+    fig, ax = plt.subplots(1, 1, figsize=(4, len(loc_dist_df.columns)/5))
+    # annot = importances_df.T[columns[1:]].T
+    subax = sns.heatmap(xcorr[[certainLayer]][1:], ax=ax,
+                        linewidths=0.1, vmin=-1.0, vmax=1.0,
+                        cmap=colormap, linecolor='white',
+                        annot=True, yticklabels=True)
+    fig.tight_layout()
 
-    svm = sns.heatmap(new_dist_df.corr(), mask=mask, linewidths=0.1, vmax=1.0,
-                      square=True, cmap=colormap, linecolor='white', annot=True)
+    return fig
 
 
+def cross_corr(dist_df, prohibited_layers=[]):
+    valid_cols = [l for l in dist_df.columns if l not in prohibited_layers]
+    loc_dist_df = dist_df[valid_cols]
+
+    whole_corr = loc_dist_df.corr()
+
+    h_layers = []
+    for lyr in loc_dist_df.columns:
+        these = []
+        segments = lyr.split('-')
+        for i, s in enumerate(segments):
+            these.append('-'.join(segments[:i] + [s]) + '-')
+        h_layers += these[:-1]
+    h_layers = sorted(set(h_layers))
+    # use the minimum from all matching columns
+    for hl in h_layers:
+        matches = [x for x in loc_dist_df.columns if hl in x]
+        if len(matches) < 2:
+            continue
+        # agg_dist = np.vstack([dist_df[m] for m in matches])
+        # lyr_dist = np.min(agg_dist, axis=0)
+        dist_df[hl] = 0
+
+    # this is all fine
+    colormap = plt.cm.RdBu_r
+    mask = np.zeros_like( loc_dist_df.corr())
+    mask[np.triu_indices_from(mask)] = True
+    svm_plot = sns.heatmap(whole_corr, mask=mask, vmin=-1.0, vmax=1.0,
+                      square=True, cmap=colormap, linecolor='k',linewidths=0.3,
+                      annot=False, yticklabels=True, xticklabels=True)
+    fig = svm_plot.get_figure()
+    svm_plot
+    fig.tight_layout()
+    fig.savefig('whole_correlation.png')
+    return fig
+
+# todo remove if i am not using this
 def autolabel(rects):
     """Attach a text label above each bar in *rects*, displaying its height."""
     for rect in rects:
@@ -398,7 +444,6 @@ def autolabel(rects):
                     textcoords="offset points",
                     ha='center', va='bottom')
 
-
 def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random_state=42):
     # clone the model to have the exact same specification as the one initially trained
     model_clone = clone(model)
@@ -407,7 +452,7 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
     # training and scoring the benchmark model
     model_clone.fit(X_train, y_train)
     benchmark_score = model_clone.score(X_train, y_train)
-    # list for storing feature importances
+    # list for storing feature importance
     importances = []
 
     n_dist_mat_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
@@ -423,22 +468,31 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, new_layers, random
         importances.append(benchmark_score - drop_col_score)
         # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
     importances_df = pd.DataFrame(importances, X_train_df.columns)
-    # todo fig size based on columns
-    ax = importances_df.plot.barh(rot=0, figsize=(12, 10))
+    # todo fig size based on rows
+    fig_height = importances_df.shape[0]/5
+    ax = importances_df.plot.barh(rot=0, figsize=(8, fig_height), grid=True)
     fig = ax.get_figure()
+    fig.tight_layout()
     plt.show(block=False)
     rand_mag = np.abs(importances_df.values[-1])
     ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
     ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
-    plt.close(fig)
-    # todo only fill in if greater than random
-    # todo name text color changes too if greater than random
+    # fig, ax = plt.subplots()
+    # rects = ax.bar(importances_df, rot=0, figsize=(18, 10))
     # autolabel(rects)
+    # rand_mag = np.abs(importances_df.values[-1])
+    # ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
+    # ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
+    # plt.show()
+    plt.close(fig)
+    # todo make a dataframe with only the ones more important than random
+    # todo only fill in with color if greater than random
+    # todo name text color changes too if greater than random
     file_name = str(certain_layer) + '.pdf'
     ax.figure.savefig(file_name)
 
-    # file1.write(text)
-    # file1.close()
+    # todo run cross corr on the ones more important than random
+
     return importances_df
 
 
@@ -458,28 +512,29 @@ def pred_locations_3d(x_rand, y_rand, z_rand, rf, X, y, certain_layer):
     fig.savefig(file_name)
 
 
-def pred_locations_2d(x_orig, y_orig, y, Z, certain_layer, bboxes,
+def pred_locations_2d(x_orig, y_orig, y, Z,
+                      certain_layer, wall_name, bboxes,
                       cmap='RdBu_r', ms=1, lw=0.5):
     fig, ax = plt.subplots(3, 1, figsize=(10, 6))
     a = ax[0]
     a.scatter(x_orig, y_orig, s=ms, c=Z, vmin=0, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
-    # a.set_title('Predicted wall for ' + certain_layer)
+    a.set_title('Predicted %s wall for %s' % (wall_name, certain_layer))
     a.set_aspect('equal')
     #
     a = ax[1]
     a.scatter(x_orig, y_orig, s=ms, c=y-Z, vmin=-1, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
-    # a.set_title('Difference in walls for ' + certain_layer)
+    a.set_title('Difference in %s wall for %s' % (wall_name, certain_layer))
     a.set_aspect('equal')
     # compare to ground truth
     a = ax[2]
     a.scatter(x_orig, y_orig, s=ms, c=y, vmin=0, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
-    # a.set_title('Ground truth for ' + certain_layer)
+    a.set_title('Ground truth %s wall for %s' % (wall_name, certain_layer))
     a.set_aspect('equal')
 
     return fig
@@ -583,12 +638,18 @@ def run_model(thresh=10):
             this_dim = dist_df[dim][wall_idx]
             dist_df[dim][wall_idx] -= this_dim.max()
 
+    fig = cross_corr(dist_df, prohibited_layers, independent_layers)
+    fig_name = os.path.join(cad_path, 'Correlation.pdf')
+    fig.savefig(fig_name)
+    plt.close(fig)
+
     predicted_layers = ['W-SURF-GYP', 'W-STON-']
     # predicted_layers = [l for l in layers if l not in independent_layers]
     for certainLayer in tqdm(predicted_layers, total=len(predicted_layers)):
         # to get index of certain layer
         layer_order = sorted(dist_df.keys())
         new_layers = [l for l in layer_order if l not in prohibited_layers and l not in certainLayer]
+
         n_dist_mat = np.array([dist_df[k].values for k in new_layers])
 
         rand_column = np.random.randint(2, size=n_dist_mat.shape[1])
@@ -628,13 +689,18 @@ def run_model(thresh=10):
 
         # figure out important features
         # reduce data volume for faster evaluation
-        train_fraction = 1
+        train_fraction = 1.0
         train_number = int(train_fraction * X.shape[0])
         train_idx = np.random.choice(X.shape[0], train_number, replace=False)
         train_mat = np.zeros(X.shape[0], dtype=np.bool)
         train_mat[train_idx] = True
-        importances = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certainLayer, new_layers)
-        importances.to_pickle(os.path.join(cad_path, '%s_feat.pkl' % certainLayer))
+        importances_df = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certainLayer, new_layers)
+        importances_df.to_pickle(os.path.join(cad_path, '%s_feat.pkl' % certainLayer))
+
+        fig = importance_corr(dist_df, certainLayer, importances_df)
+        fig_name = os.path.join(cad_path, '%s_Correlation.pdf' % certainLayer)
+        fig.savefig(fig_name)
+        plt.close(fig)
 
         # make predictions and plot them
         x_orig = dist_df['X_ORIG']
@@ -644,7 +710,7 @@ def run_model(thresh=10):
         for w in range(4):
             w_idx = dist_df['WALL_POSITION'] == w
             fig = pred_locations_2d(x_orig[w_idx], y_orig[w_idx], y[w_idx], Z[w_idx],
-                                    certainLayer, bbox[w], cmap='RdBu_r', ms=1, lw=0.5)
+                                    directions[w], certainLayer, bbox[w], cmap='RdBu_r', ms=1, lw=0.5)
             fig_name = '%s_%s_Wall.pdf' % (certainLayer, directions[w])
             fig.savefig(os.path.join(cad_path, fig_name))
             plt.close(fig)
