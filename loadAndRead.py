@@ -16,6 +16,7 @@ from scipy.spatial import distance
 import collections
 import os
 import glob
+import multiprocessing as mproc
 
 
 def make_spatial_weights(r):
@@ -373,12 +374,15 @@ def specific_combine(dist_df, new_layers):
     return n_dist_mat, new_layers
 
 
-def importance_corr(dist_df, certainLayer, importances_df):
+def importance_corr(dist_df, certainLayer, importances_df, max_features=None):
     #
     valid = importances_df > np.abs(importances_df.T['random'][0])
     valid_cols = [c for c in valid.T.columns if valid.T[c][0]]
     valid_imp = [importances_df[0][c] for c in valid_cols]
-    columns = [certainLayer] + [valid_cols[x] for x in np.argsort(valid_imp)[::-1]]
+    sorted_cols = [valid_cols[x] for x in np.argsort(valid_imp)[::-1]]
+    if max_features is not None:
+        sorted_cols = sorted_cols[0:min(len(sorted_cols), max_features)]
+    columns = [certainLayer] + sorted_cols
     loc_dist_df = dist_df[columns]
     #
     xcorr = loc_dist_df.corr()
@@ -396,7 +400,7 @@ def importance_corr(dist_df, certainLayer, importances_df):
     return fig
 
 
-def cross_corr(dist_df, cad_path, prohibited_layers=[]):
+def cross_corr(dist_df, prohibited_layers=[]):
     h_layers = []
     for lyr in dist_df.columns:
         these = []
@@ -418,9 +422,17 @@ def cross_corr(dist_df, cad_path, prohibited_layers=[]):
                            square=True, cmap=colormap, linecolor='k', linewidths=0.3,
                            annot=False, yticklabels=True, xticklabels=True)
     fig.tight_layout()
-    fig.savefig(cad_path +'whole_correlation.pdf')
-    plt.close(fig)
+
     return fig
+
+
+def drop_one_col(work_data):
+    model, col, X_train, y_train = work_data
+    model_clone = clone(model)
+    col_data = X_train.drop(col, axis=1)
+    model_clone.fit(col_data, y_train)
+    drop_col_score = model_clone.score(col_data, y_train)
+    return (col, drop_col_score)
 
 
 def drop_col_feat_imp(model, X_train, y_train, certain_layer, cad_path, new_layers, random_state=42):
@@ -431,34 +443,32 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, cad_path, new_laye
     # training and scoring the benchmark model
     model_clone.fit(X_train, y_train)
     benchmark_score = model_clone.score(X_train, y_train)
-    # list for storing feature importance
-    importances = []
 
     # n_dist_mat_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
     X_train_df = pd.DataFrame(data=X_train, columns=new_layers + ['random'])
 
+    # parallel implementation
+    p = mproc.Pool(4)
+    work_data = [(model, col, X_train_df, y_train) for col in X_train_df.columns]
+    results = p.map(drop_one_col, work_data)
+    p.close()
+    p.join()
+
+    results_dict = {k: v for k, v in results}
+    importances = [benchmark_score - results_dict[col] for col in X_train_df.columns]
+
     # iterating over all columns and storing feature importance (difference between benchmark and new model)
-    for col in tqdm(X_train_df.columns, total=len(X_train_df.columns)):
-        model_clone = clone(model)
-        model_clone.random_state = random_state
-        col_data = X_train_df.drop(col, axis=1)
-        model_clone.fit(col_data, y_train)
-        drop_col_score = model_clone.score(col_data, y_train)
-        importances.append(benchmark_score - drop_col_score)
+    # importances = []  # list for storing feature importance
+    # for col in tqdm(X_train_df.columns, total=len(X_train_df.columns)):
+    #     model_clone = clone(model)
+    #     model_clone.random_state = random_state
+    #     col_data = X_train_df.drop(col, axis=1)
+    #     model_clone.fit(col_data, y_train)
+    #     drop_col_score = model_clone.score(col_data, y_train)
+    #     importances.append(benchmark_score - drop_col_score)
         # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
     importances_df = pd.DataFrame(importances, X_train_df.columns)
-    fig_title = str(certain_layer) + ' feature importance'
-    fig_height = importances_df.shape[0] / 5
-    ax = importances_df.plot.barh(rot=0, figsize=(8, fig_height), grid=True, title=fig_title)
-    fig = ax.get_figure()
-    fig.tight_layout()
-    plt.show(block=False)
-    rand_mag = np.abs(importances_df.values[-1])
-    ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
-    ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
-    plt.close(fig)
-    file_name = cad_path + str(certain_layer) + ' feature-importance.pdf'
-    ax.figure.savefig(file_name)
+
     return importances_df
 
 
@@ -505,6 +515,17 @@ def pred_locations_2d(x_orig, y_orig, y, Z,
 
     return fig
 
+def plot_gt_2d(x_orig, y_orig, d,
+               certain_layer, wall_name, bboxes,
+               cmap='RdBu_r', ms=1, lw=0.5, vmax=None):
+    fig, ax = plt.subplots(1, 1, figsize=(10, 2.5))
+    ax.scatter(x_orig, y_orig, s=ms, c=d, cmap=cmap, vmin=0, vmax=vmax)
+    for bb in bboxes:
+        ax.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
+    ax.set_title('Distance to %s for %s wall' % (certain_layer, wall_name))
+    ax.set_aspect('equal')
+
+    return fig
 
 def compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
     # read the cad file
@@ -530,10 +551,20 @@ def compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
             dist_df.to_pickle(os.path.join(cad_path, 'dists_%05d.pkl' % idx))
 
 
-def run_model(thresh=10):
+def run_model(thresh=10,
+              plot_correlation=False,
+              plot_importance=False,
+              plot_wall=False,
+              calculate_importance=False,
+              importance_type='model'):
+
+    if importance_type not in ['model', 'drop_col']:
+        raise ValueError('importance_type must be one of "model" or "drop_col"')
+
     independent_layers = ['X', 'Y', 'Z', 'POINT_FACING', 'WALL_POSITION', 'E-METL-T2',
                           'E-METL-T4', 'W-STON-HOLE', 'BOUNDBOX_C', 'BOUNDBOX_I', 'BOUNDBOX_O',
-                          'GRASS', 'SIDEWALK', 'TREE', 'C-HANG', 'C-HANG-5', 'C-HANG-7']
+                          'GRASS', 'SIDEWALK', 'TREE', 'C-HANG', 'C-HANG-1', 'C-HANG-2',
+                          'C-HANG-3', 'C-HANG-4', 'C-HANG-5', 'C-HANG-6', 'C-HANG-7']
 
     prohibited_layers = ['W-STON-DELAM', 'W-STON-STRAT-T1', 'E-METL-T3', 'W-STON-RESET-T4',
                          '0', '0-TIFF', 'A-ANNO-COLCTR', 'A-ANNO-COLNO', 'A-ANNO-CUTLINE', 'A-',
@@ -589,13 +620,6 @@ def run_model(thresh=10):
         lyr_dist = np.min(agg_dist, axis=0)
         dist_df[hl] = lyr_dist
 
-    # remove these, they are from old data
-    aggregated_layers = ['C-CRCK', 'C-HANG', 'C-REPR', 'E-METL', 'E-VEGT', 'W-CRCK', 'W-MRTR-BCKP', 'W-MRTR-FNSH',
-                         'W-STON-RESET', 'W-SURF-STAIN']
-    for al in aggregated_layers:
-        if al in dist_df.columns:
-            del dist_df[al]
-
     # for each index in wall position. find max x.y.z and put that at 0,0,0
     for wall_pos in range(4):
         wall_idx = dist_df['WALL_POSITION'] == wall_pos
@@ -603,20 +627,38 @@ def run_model(thresh=10):
             this_dim = dist_df[dim][wall_idx]
             dist_df[dim][wall_idx] -= this_dim.max()
 
-    fig = cross_corr(dist_df, cad_path, prohibited_layers)
+    if plot_correlation:
+        fig = cross_corr(dist_df, prohibited_layers)
+        fig.savefig(os.path.join(cad_path, 'whole_correlation.pdf'))
+        plt.close(fig)
 
-    # $$$ CHANGE THESE FOR WHAT YOU ARE INTERESTED IN $$$
-    predicted_layers = ['W-SURF-GYP']
-        # , 'W-STON-', 'C-REPR-T1',
-        #                 'C-REPR-T2', 'C-REPR-T3', 'C-REPR-T4'
-        #                 'C-REPR-T5', 'C-REPR-T6', 'C-SPALL',
-        #                 'E-VEGT-BIOGRW','E-VEGT-GROWIES',
-        #                 'W-CRCK-POLY', 'W-CRCK-CIRC']
-    # predicted_layers = [l for l in layers if l not in independent_layers]
-    for certainLayer in tqdm(predicted_layers, total=len(predicted_layers)):
+    if plot_ground_truth:
+        bottom_left = np.array([dist_df[dim].min() for dim in ['X', 'Y', 'Z']])
+        top_right = np.array([dist_df[dim].max() for dim in ['X', 'Y', 'Z']])
+        vmax = 0.05 * np.linalg.norm(top_right - bottom_left)
+        for certain_layer in dist_df.columns:
+            if certain_layer in ['X', 'Y', 'Z', 'POINT_FACING', 'WALL_POSITION'] + prohibited_layers:
+                continue
+            # make predictions and plot them
+            x_orig = dist_df['X_ORIG']
+            y_orig = dist_df['Y_ORIG']
+            Z = dist_df[certain_layer]
+            #
+            for w in range(4):
+                w_idx = dist_df['WALL_POSITION'] == w
+                fig = plot_gt_2d(x_orig[w_idx], y_orig[w_idx], Z[w_idx],
+                                 certain_layer, directions[w], bbox[w],
+                                 cmap='Blues_r', ms=1, lw=0.5, vmax=vmax)
+                fig_name = '%s_%s_Wall_GT.pdf' % (certain_layer, directions[w])
+                fig.savefig(os.path.join(cad_path, fig_name))
+                plt.close(fig)
+
+    predicted_layers = [l for l in layers if l not in independent_layers and l not in prohibited_layers]
+    predicted_layers = predicted_layers[::-1]
+    for certain_layer in tqdm(predicted_layers, total=len(predicted_layers)):
         # to get index of certain layer
         layer_order = sorted(dist_df.keys())
-        new_layers = [l for l in layer_order if l not in prohibited_layers and l not in certainLayer]
+        new_layers = [l for l in layer_order if l not in prohibited_layers and l not in certain_layer]
 
         n_dist_mat = np.array([dist_df[k].values for k in new_layers])
 
@@ -626,70 +668,104 @@ def run_model(thresh=10):
         X = n_dist_mat.transpose()
         X[np.isinf(X)] = 1e12
 
-        y = dist_df[certainLayer].values <= thresh
+        if np.all(np.unique(dist_df[certain_layer].values) == np.array([0, 1])):
+            y = dist_df[certain_layer].values
+        else:
+            y = dist_df[certain_layer].values <= thresh
 
-        # set aside some data for testing the model later
-        test_fraction = 0.25
-        test_number = int(test_fraction * X.shape[0])
-        test_idx = np.random.choice(X.shape[0], test_number, replace=False)
-        test_mat = np.zeros(X.shape[0], dtype=np.bool)
-        test_mat[test_idx] = True
-        train_mat = ~test_mat
-        print('working on %s' % certainLayer)
-        if np.sum(y[train_mat]) == 0 or np.sum(~y[train_mat]) == 0:
-            print('skipping %s' % certainLayer)
-            continue
+        if calculate_importance or plot_wall:
+            # set aside some data for testing the model later
+            test_fraction = 0.25
+            test_number = int(test_fraction * X.shape[0])
+            test_idx = np.random.choice(X.shape[0], test_number, replace=False)
+            test_mat = np.zeros(X.shape[0], dtype=np.bool)
+            test_mat[test_idx] = True
+            train_mat = (test_mat == 0)
+            print('working on %s' % certain_layer)
+            if np.sum(y[train_mat]) == 0 or np.sum(y[train_mat] == 0) == 0:
+                print('skipping %s' % certain_layer)
+                continue
 
-        # train the random forest
-        rf = RandomForestClassifier(n_estimators=100, max_depth=5,
-                                    oob_score=True)  # n_estimators=500, WANT LOWER NUMBER --> MORE GENERIC
-        rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
+            # train the random forest
+            rf = RandomForestClassifier(max_depth=16, random_state=42,
+                                        n_estimators=64,
+                                        oob_score=True)  # n_estimators=500, WANT LOWER NUMBER --> MORE GENERIC
+            rf = rf.fit(X[train_mat], y[train_mat])  # train only on some part of the data
 
-        # eval model on test data
-        print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
-        print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
-        # print('layer contribution to RF in descending order:')
-        # for x in np.argsort(rf.feature_importances_)[::-1]:
-        #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], new_layers[idx[x]]))
-        #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], new_layers[x]))
+            # eval model on test data
+            print('OOB score %f' % rf.oob_score_)  # if bad (< 0.7), rf cant handle this prediction
+            print('score on test data %f' % rf.score(X[test_mat], y[test_mat]))  # get the score on unseen data
+            # print('layer contribution to RF in descending order:')
+            # for x in np.argsort(rf.feature_importances_)[::-1]:
+            #     # print('%3d : %10f : %s' % (idx[x], rf.feature_importances_[x], new_layers[idx[x]]))
+            #     print('%3d : %10f : %s' % (x, rf.feature_importances_[x], new_layers[x]))
 
         # todo: confusion matrix for predictions
 
-        # figure out important features
-        # reduce data volume for faster evaluation
-        train_fraction = 1.0
-        train_number = int(train_fraction * X.shape[0])
-        train_idx = np.random.choice(X.shape[0], train_number, replace=False)
-        train_mat = np.zeros(X.shape[0], dtype=np.bool)
-        train_mat[train_idx] = True
-        importances_df = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certainLayer, cad_path, new_layers)
-        importances_df.to_pickle(os.path.join(cad_path, '%s_feat.pkl' % certainLayer))
+        importances_df = None
+        if calculate_importance:
+            if importance_type == 'drop_col':  # with permutation importance
+                # figure out important features
+                # reduce data volume for faster evaluation
+                train_fraction = 1.0
+                train_number = int(train_fraction * X.shape[0])
+                train_idx = np.random.choice(X.shape[0], train_number, replace=False)
+                train_mat = np.zeros(X.shape[0], dtype=np.bool)
+                train_mat[train_idx] = True
+                importances_df = drop_col_feat_imp(rf, X[train_mat], y[train_mat], certain_layer, cad_path, new_layers)
+                importances_df.to_pickle(os.path.join(cad_path, '%s_feat.pkl' % certain_layer))
+            elif importance_type == 'model':  # with rf feature importance
+                importances_df = pd.DataFrame(rf.feature_importances_, new_layers + ['random'])
+                importances_df.to_pickle(os.path.join(cad_path, '%s_feat_model.pkl' % certain_layer))
+        else:
+            if importance_type == 'drop_col':  # with permutation importance
+                importances_df = pd.read_pickle(os.path.join(cad_path, '%s_feat.pkl' % certain_layer))
+            elif importance_type == 'model':  # with rf feature importance
+                importances_df = pd.read_pickle(os.path.join(cad_path, '%s_feat_model.pkl' % certain_layer))
 
-        fig = importance_corr(dist_df, certainLayer, importances_df)
-        fig_name = os.path.join(cad_path, '%s_Correlation.pdf' % certainLayer)
-        fig.savefig(fig_name)
-        plt.close(fig)
+        if plot_importance:
+            fig_title = str(certain_layer) + ' feature importance'
+            fig_height = importances_df.shape[0] / 5
+            ax = importances_df.plot.barh(rot=0, figsize=(8, fig_height), grid=True, title=fig_title)
+            fig = ax.get_figure()
+            fig.tight_layout()
+            plt.show(block=False)
+            rand_mag = np.abs(importances_df.values[-1])
+            ax.plot(rand_mag * np.ones(2), ax.get_ylim(), 'k--')
+            ax.plot(-rand_mag * np.ones(2), ax.get_ylim(), 'k--')
+            plt.close(fig)
+            file_name = os.path.join(cad_path, '%s_FeatureImportance.pdf' % certain_layer)
+            ax.figure.savefig(file_name)
 
-        # make predictions and plot them
-        x_orig = dist_df['X_ORIG']
-        y_orig = dist_df['Y_ORIG']
-        Z = rf.predict_proba(X)[:, 1]
-        #
-        for w in range(4):
-            w_idx = dist_df['WALL_POSITION'] == w
-            fig = pred_locations_2d(x_orig[w_idx], y_orig[w_idx], y[w_idx], Z[w_idx],
-                                    directions[w], certainLayer, bbox[w], cmap='RdBu_r', ms=1, lw=0.5)
-            fig_name = '%s_%s_Wall.pdf' % (certainLayer, directions[w])
-            fig.savefig(os.path.join(cad_path, fig_name))
+        if plot_correlation:
+            fig = importance_corr(dist_df, certain_layer, importances_df, max_features=10)
+            fig_name = os.path.join(cad_path, '%s_Correlation.pdf' % certain_layer)
+            fig.savefig(fig_name)
             plt.close(fig)
 
-
-
+        if plot_wall:
+            # make predictions and plot them
+            x_orig = dist_df['X_ORIG']
+            y_orig = dist_df['Y_ORIG']
+            Z = rf.predict_proba(X)[:, 1]
+            #
+            for w in range(4):
+                w_idx = dist_df['WALL_POSITION'] == w
+                fig = pred_locations_2d(x_orig[w_idx], y_orig[w_idx], y[w_idx], Z[w_idx],
+                                        directions[w], certain_layer, bbox[w], cmap='RdBu_r', ms=1, lw=0.5)
+                fig_name = '%s_%s_Wall.pdf' % (certain_layer, directions[w])
+                fig.savefig(os.path.join(cad_path, fig_name))
+                plt.close(fig)
 
 
 def main():
     compute_distances(cad_files, cad_path, num_samples=1000, num_batches=10)
-    run_model(thresh=10)
+    run_model(thresh=10,
+              plot_correlation=True,
+              plot_importance=True,
+              plot_wall=False,
+              calculate_importance=False,
+              importance_type='model')
 
 # if __name__ == '__main__':
 #     main()
