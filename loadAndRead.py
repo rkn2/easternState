@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 from mpl_toolkits.mplot3d import axes3d, Axes3D
-# from factor_analyzer import FactorAnalyzer
+from factor_analyzer import FactorAnalyzer
 import seaborn as sns
 from sklearn.base import clone
 from scipy.spatial import distance
@@ -65,15 +65,18 @@ def get_layer_points(ch, work_area, points):
     return poly
 
 
-# def makeScree(fa):
-#     ev, v = fa.get_eigenvalues()
-#     plt.scatter(range(1, df.shape[1] + 1), np.log(ev))
-#     plt.plot(range(1, df.shape[1] + 1), np.log(ev))
-#     plt.title('Scree Plot')
-#     plt.xlabel('Factors')
-#     plt.ylabel('Eigenvalue')
-#     plt.grid()
-#     plt.show()
+def makeScree(fa, dist_df):
+    ev, v = fa.get_eigenvalues()
+    fig, ax = plt.subplots(1, 1)
+    ax.scatter(range(1, dist_df.shape[1] + 1), np.log(ev))
+    ax.plot(range(1, dist_df.shape[1] + 1), np.log(ev))
+    ax.set_title('Scree Plot')
+    ax.set_xlabel('Factors')
+    ax.set_ylabel('Eigenvalue')
+    ax.grid()
+
+    return fig
+
 
 class coordHandler(object):
     def __init__(self, bb_pts):
@@ -517,15 +520,19 @@ def pred_locations_2d(x_orig, y_orig, y, Z,
 
 def plot_gt_2d(x_orig, y_orig, d,
                certain_layer, wall_name, bboxes,
-               cmap='RdBu_r', ms=1, lw=0.5, vmax=None):
-    fig, ax = plt.subplots(1, 1, figsize=(10, 2.5))
-    ax.scatter(x_orig, y_orig, s=ms, c=d, cmap=cmap, vmin=0, vmax=vmax)
+               cmap='RdBu_r', ms=1, lw=0.5,
+               ax=None, vmin=None, vmax=None):
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 2.5))
+
+    ax.scatter(x_orig, y_orig, s=ms, c=d, cmap=cmap, vmin=vmin, vmax=vmax)
     for bb in bboxes:
         ax.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
     ax.set_title('Distance to %s for %s wall' % (certain_layer, wall_name))
     ax.set_aspect('equal')
 
-    return fig
+    if ax is None:
+        return fig
 
 def compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
     # read the cad file
@@ -770,44 +777,96 @@ def main():
 # if __name__ == '__main__':
 #     main()
 
-# # regular fa
-# fa = FactorAnalyzer()
-# numFactors = 4
-# # df = pd.DataFrame(truthMat, columns=layers)
-# # unnecessaryColumns = [layers[x] for x in [0, 1, 2, 3, 9]]
-# df = pd.DataFrame(truthMat, columns=newLayers)
-# unnecessaryColumns = [x for i, x in enumerate(newLayers) if np.max(nDistMat[:, i]) == np.Inf]
-# df.drop(unnecessaryColumns, axis=1, inplace=True)
-# df.dropna(inplace=True)
-# fa.analyze(df, numFactors, rotation=None)
-# L = np.array(fa.loadings)
-# headings = list(fa.loadings.transpose().keys())
-# factor_threshold = 0.4
-# factors = []
-# for i, factor in enumerate(L.transpose()):
-#     descending = np.argsort(np.abs(factor))[::-1]
-#     contributions = [(np.round(factor[x], 2), headings[x]) for x in descending if np.abs(factor[x]) > factor_threshold]
-#     factors.append(contributions)
-#     print('Factor %d:' % (i + 1), contributions)
-#
-# factor_list = []
-# weight_list = []
-# for i, factor in enumerate(factors):
-#     factor_list.append([])
-#     weight_list.append([])
-#     for j, condition in enumerate(factor):
-#         factor_list[i].append(condition[1])
-#         weight_list[i].append(condition[0])
-#
-# for m, entry in enumerate(factor_list):
-#     n = int(math.ceil(len(entry) / 3))
-#     fig = plt.figure()
-#
-#     for k, val in enumerate(entry):
-#         index = [i for i, s in enumerate(newLayers) if val in s]
-#         ax = fig.add_subplot(n, 3, k + 1)
-#         ax.scatter(xRand, yRand, s=1, c=truthMat[:, index[0]], vmin=0, vmax=1)
-#         title_string = val + ' ' + str(weight_list[m][k])
-#         ax.set_title(title_string)
-#         # Hide x labels and tick labels for top plots and y ticks for right plots.
-#         ax.label_outer()
+def factor_analysis(df, numFactors=4, prohibited_layers=[]):
+    # regular fa
+    fa = FactorAnalyzer()
+    #
+    df.drop([l for l in prohibited_layers if l in df.columns], axis=1, inplace=True)
+    df.dropna(inplace=True)
+    df[np.isinf(df)] = 1e12
+    #
+    df_std = np.std(df, axis=0)
+    valid_std = sorted([c for c in df.columns if df_std[c] > 0])
+    #
+    fa.analyze(df[valid_std], numFactors, rotation=None)
+    L = np.array(fa.loadings)
+    headings = list(fa.loadings.transpose().keys())
+    factor_threshold = 0.4
+    factors = []
+    for i, factor in enumerate(L.transpose()):
+        descending = np.argsort(np.abs(factor))[::-1]
+        contributions = [(np.round(factor[x], 2), headings[x]) for x in descending if np.abs(factor[x]) > factor_threshold]
+        factors.append(contributions)
+        print('Factor %d:' % (i + 1), contributions)
+
+    stacked_bars = False
+    h = len(fa.loadings) / 5
+    fig, ax = plt.subplots(1, 1, figsize=(6, h))
+    c = np.zeros(L.shape[0])
+    for i, factor in enumerate(fa.loadings.columns):
+        if not stacked_bars:
+            important_features = np.argsort(1 - np.abs(fa.loadings[:][factor].values))
+            edgecolor = ['k' if i in important_features[:10] else 'none' for i, e in enumerate(important_features)]
+            line_width = [1.5 if i in important_features[:10] else 0 for i, e in enumerate(important_features)]
+            ax.barh(fa.loadings.T.columns, fa.loadings[:][factor], left=c, ec=edgecolor, lw=line_width)
+            c += fa.loadings[:][factor].max() - fa.loadings[:][factor].min()
+        else:
+            ax.barh(fa.loadings.T.columns, np.abs(fa.loadings[:][factor]), left=c)
+            c += np.abs(fa.loadings[:][factor])
+        # if stacked_bars:
+        #     c += np.abs(fa.loadings[:][factor]).max()
+        # else:
+        #     c += np.abs(fa.loadings[:][factor])
+    ax.tick_params(
+        axis='x',  # changes apply to the x-axis
+        which='both',  # both major and minor ticks are affected
+        bottom=False,  # ticks along the bottom edge are off
+        top=False,  # ticks along the top edge are off
+        labelbottom=False)  # labels along the bottom edge are off
+    fig.tight_layout()
+    fig.savefig(os.path.join(cad_path, 'FactorAnalysis_%d_%s.pdf' % (numFactors, stacked_bars)))
+
+    if plot_wall:
+        # make predictions and plot them
+        x_orig = dist_df['X_ORIG']
+        y_orig = dist_df['Y_ORIG']
+        for i, factor in enumerate(fa.loadings.columns):
+            Z = np.zeros(len(dist_df))
+            inv_loadings = np.linalg.pinv(fa.loadings)
+            for j, col in enumerate(fa.loadings.T.columns):
+                Z += inv_loadings[i, j] * dist_df[col]
+            #
+            mag = np.median(np.abs(Z)) * 5
+            #
+            fig, ax = plt.subplots(4, 1, figsize=(10, 10))
+            for w in range(4):
+                w_idx = dist_df['WALL_POSITION'] == w
+                plot_gt_2d(x_orig[w_idx], y_orig[w_idx], Z[w_idx],
+                                 factor, directions[w], bbox[w],
+                                 cmap='RdBu_r', ms=1, lw=0.5, ax=ax[w],)
+                                 #vmin=-mag, vmax=mag)
+            fig_name = '%s.pdf' % factor
+            fig.savefig(os.path.join(cad_path, fig_name))
+            plt.close(fig)
+
+    factor_list = []
+    weight_list = []
+    for i, factor in enumerate(factors):
+        factor_list.append([])
+        weight_list.append([])
+        for j, condition in enumerate(factor):
+            factor_list[i].append(condition[1])
+            weight_list[i].append(condition[0])
+    #
+    # for m, entry in enumerate(factor_list):
+    #     n = int(np.ceil(len(entry) / 3))
+    #     fig = plt.figure()
+    #
+    #     for k, val in enumerate(entry):
+    #         index = [i for i, s in enumerate(newLayers) if val in s]
+    #         ax = fig.add_subplot(n, 3, k + 1)
+    #         ax.scatter(xRand, yRand, s=1, c=truthMat[:, index[0]], vmin=0, vmax=1)
+    #         title_string = val + ' ' + str(weight_list[m][k])
+    #         ax.set_title(title_string)
+    #         # Hide x labels and tick labels for top plots and y ticks for right plots.
+    #         ax.label_outer()
