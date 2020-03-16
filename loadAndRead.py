@@ -417,11 +417,11 @@ def cross_corr(dist_df, prohibited_layers=[]):
 
     whole_corr = loc_dist_df.corr()
     colormap = plt.cm.RdBu_r
-    mask = np.zeros_like(loc_dist_df.corr())
-    mask[np.triu_indices_from(mask)] = True
+    # mask = np.zeros_like(loc_dist_df.corr())
+    # mask[np.triu_indices_from(mask)] = True
     wh = len(valid_cols) / 5
     fig, ax = plt.subplots(1, 1, figsize=(wh, wh))
-    svm_plot = sns.heatmap(whole_corr, mask=mask, vmin=-1.0, vmax=1.0, ax=ax,
+    svm_plot = sns.heatmap(whole_corr, vmin=-1.0, vmax=1.0, ax=ax,
                            square=True, cmap=colormap, linecolor='k', linewidths=0.3,
                            annot=False, yticklabels=True, xticklabels=True)
     fig.tight_layout()
@@ -788,7 +788,7 @@ def factor_analysis(df, numFactors=4, prohibited_layers=[]):
     df_std = np.std(df, axis=0)
     valid_std = sorted([c for c in df.columns if df_std[c] > 0])
     #
-    fa.analyze(df[valid_std], numFactors, rotation=None)
+    fa.analyze(df[valid_std], numFactors, rotation='varimax')
     L = np.array(fa.loadings)
     headings = list(fa.loadings.transpose().keys())
     factor_threshold = 0.4
@@ -799,6 +799,7 @@ def factor_analysis(df, numFactors=4, prohibited_layers=[]):
         factors.append(contributions)
         print('Factor %d:' % (i + 1), contributions)
 
+    inv = True
     stacked_bars = False
     h = len(fa.loadings) / 5
     fig, ax = plt.subplots(1, 1, figsize=(6, h))
@@ -808,8 +809,12 @@ def factor_analysis(df, numFactors=4, prohibited_layers=[]):
             important_features = np.argsort(1 - np.abs(fa.loadings[:][factor].values))
             edgecolor = ['k' if i in important_features[:10] else 'none' for i, e in enumerate(important_features)]
             line_width = [1.5 if i in important_features[:10] else 0 for i, e in enumerate(important_features)]
-            ax.barh(fa.loadings.T.columns, fa.loadings[:][factor], left=c, ec=edgecolor, lw=line_width)
-            c += fa.loadings[:][factor].max() - fa.loadings[:][factor].min()
+            if inv:
+                data = np.linalg.pinv(fa.loadings).T[:, i]
+            else:
+                data = fa.loadings[:][factor]
+            ax.barh(fa.loadings.T.columns, data, left=c, ec=edgecolor, lw=line_width)
+            c += data.max() - data.min()
         else:
             ax.barh(fa.loadings.T.columns, np.abs(fa.loadings[:][factor]), left=c)
             c += np.abs(fa.loadings[:][factor])
@@ -825,22 +830,24 @@ def factor_analysis(df, numFactors=4, prohibited_layers=[]):
         labelbottom=False)  # labels along the bottom edge are off
     fig.tight_layout()
     fig.savefig(os.path.join(cad_path, 'FactorAnalysis_%d_%s.pdf' % (numFactors, stacked_bars)))
+    plt.close(fig)
 
     if plot_wall:
         # make predictions and plot them
         x_orig = dist_df['X_ORIG']
         y_orig = dist_df['Y_ORIG']
         for i, factor in enumerate(fa.loadings.columns):
-            Z = np.zeros(len(dist_df))
+            Z = np.zeros(len(df))
             inv_loadings = np.linalg.pinv(fa.loadings)
+            # inv_loadings = np.array(fa.loadings).T
             for j, col in enumerate(fa.loadings.T.columns):
-                Z += inv_loadings[i, j] * dist_df[col]
+                Z += inv_loadings[i, j] * (df[col] - np.mean(df[col])) / np.std(df[col])
             #
             mag = np.median(np.abs(Z)) * 5
             #
             fig, ax = plt.subplots(4, 1, figsize=(10, 10))
             for w in range(4):
-                w_idx = dist_df['WALL_POSITION'] == w
+                w_idx = df['WALL_POSITION'] == w
                 plot_gt_2d(x_orig[w_idx], y_orig[w_idx], Z[w_idx],
                                  factor, directions[w], bbox[w],
                                  cmap='RdBu_r', ms=1, lw=0.5, ax=ax[w],)
