@@ -56,7 +56,7 @@ def get_layer_points(ch, work_area, points):
                 return None
     else:
         return None
-    points_3d = ch.embed(points, allow_inexact=False)
+    points_3d = ch.embed(points, use_hull=True, allow_inexact=False)
     if points_3d is None:
         return None
     poly = Polygon(points_3d)
@@ -106,7 +106,7 @@ class coordHandler(object):
     def xform_top(self, p):
         return [p[0], self.y_range[1], p[1]]
 
-    def embed(self, points, allow_inexact=False):
+    def embed(self, points, use_hull=False, allow_inexact=False):
         # points = [p for p in raw_points if self.all_segments.contains(Point(p))]
         # if len(points) < 3:
         #     return None
@@ -114,7 +114,10 @@ class coordHandler(object):
             cent = Polygon(points).centroid
         else:
             cent = Point(np.mean(points, axis=0))
-        segment_distance = [x.distance(Point(cent)) for x in self.segments]
+        if use_hull:
+            segment_distance = [x.convex_hull.distance(Point(cent)) for x in self.segments]
+        else:
+            segment_distance = [x.distance(Point(cent)) for x in self.segments]
         best_segment = np.argmin(segment_distance)
         if not allow_inexact and segment_distance[best_segment] > 0:
             return None
@@ -232,7 +235,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
                         none_layer[lyr] += 1
                         if none_layer[lyr] > 1 and 'ANNO' not in lyr:
                             print('got anomalous None poly from %s - %d' % (lyr, idx))
-
+            #
             if lyr in split_circ_poly:
                 for k, v in poly_list.items():
                     layer_dict['%s-%s' % (lyr, k)] = v
@@ -255,7 +258,7 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
         while len(point_3d_list) < num_samples:
             x = np.random.uniform(min_max[0, 0], min_max[1, 0])
             y = np.random.uniform(min_max[0, 1], min_max[1, 1])
-            r = ch.embed([[x, y]], allow_inexact=False)
+            r = ch.embed([[x, y]], use_hull=False, allow_inexact=False)
             if r is None:
                 continue
             else:
@@ -316,8 +319,9 @@ def get_data(cad_files, num_samples=1000):  # cadFile is complete path
 
         # discount manual w-mrtr-fnsh-t2
         mrtr = np.zeros(num_samples)
-        anti_mortar_layers = ['W-MRTR-BCKP', 'W-MRTR-FNSH-T1', 'W-MRTR-OPEN',
-                              'W-STON-BULG-T2', 'W-STON-BULG-T3', 'W-STON-RESET',
+        anti_mortar_layers = ['W-MRTR-BCKP-T1', 'W-MRTR-BCKP-T2', 'W-MRTR-BCKP-T3',
+                              'W-MRTR-FNSH-T1', 'W-MRTR-OPEN', 'W-STON-BULG-T2', 'W-STON-BULG-T3',
+                              'W-STON-RESET-T1', 'W-STON-RESET-T2', 'W-STON-RESET-T3',
                               'W-SURF-RENDR', 'boundBox_C']
         for i in range(len(mrtr)):
             # if its not 0 in any of those layers and it is not in the coping, then it is this
@@ -469,7 +473,7 @@ def drop_col_feat_imp(model, X_train, y_train, certain_layer, cad_path, new_laye
     #     model_clone.fit(col_data, y_train)
     #     drop_col_score = model_clone.score(col_data, y_train)
     #     importances.append(benchmark_score - drop_col_score)
-        # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
+    # text.append(str(col) + ' : ' + str(benchmark_score - drop_col_score) + '\n')
     importances_df = pd.DataFrame(importances, X_train_df.columns)
 
     return importances_df
@@ -518,6 +522,7 @@ def pred_locations_2d(x_orig, y_orig, y, Z,
 
     return fig
 
+
 def plot_gt_2d(x_orig, y_orig, d,
                certain_layer, wall_name, bboxes,
                cmap='RdBu_r', ms=1, lw=0.5,
@@ -534,6 +539,7 @@ def plot_gt_2d(x_orig, y_orig, d,
     if ax is None:
         return fig
 
+
 def compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
     # read the cad file
     # cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
@@ -543,19 +549,61 @@ def compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
     #          r'2020-03-11 - et - DRAFT West Wall_BN.dxf']
     # cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
 
+    # get the pkl path
+    pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+    pkl_idx = sorted([int(x.split('/')[-1].split('_')[1].replace('.pkl', '')) for x in pkl_files])
+    if len(pkl_idx) == 0:
+        idx = 0
+    else:
+        idx = pkl_idx[-1] + 1
+    #
+    k = -1
     for batch in range(num_batches):
         for cf in cad_files:
+            k +=1
+
+            if 'South' not in cf:
+                continue
+
             # compute the distances
             layer_dict, dist_df = get_data([cf], num_samples)
 
             # save the distances
-            pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
-            pkl_idx = sorted([int(x.split('/')[-1].split('_')[1].replace('.pkl', '')) for x in pkl_files])
-            if len(pkl_idx) == 0:
-                idx = 0
-            else:
-                idx = pkl_idx[-1] + 1
-            dist_df.to_pickle(os.path.join(cad_path, 'dists_%05d.pkl' % idx))
+            dist_df.to_pickle(os.path.join(cad_path, 'dists_%05d.pkl' % (idx + k)))
+
+
+
+def worker_task(work_data):
+    cf, pkl_path, num_samples = work_data
+    # compute the distances
+    layer_dict, dist_df = get_data([cf], num_samples)
+    # save the distances
+    dist_df.to_pickle(pkl_path)
+    return True
+
+
+def parallel_compute_distances(cad_files, cad_path, num_samples=100, num_batches=1):
+    # get the pkl path
+    pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+    pkl_idx = sorted([int(x.split('/')[-1].split('_')[1].replace('.pkl', '')) for x in pkl_files])
+    if len(pkl_idx) == 0:
+        idx = 0
+    else:
+        idx = pkl_idx[-1] + 1
+    # define the worker data
+    work_data = []
+    k = 0
+    for batch in range(num_batches):
+        for cf in cad_files:
+            # compute the distances
+            pkl_path = os.path.join(cad_path, 'dists_%05d.pkl' % (idx+k))
+            work_data.append((cf, pkl_path, num_samples))
+            k += 1
+    # run the Pool
+    p = mproc.Pool(4)
+    results = p.map(worker_task, work_data)
+    p.close()
+    p.join()
 
 
 def run_model(thresh=10,
@@ -564,18 +612,20 @@ def run_model(thresh=10,
               plot_wall=False,
               calculate_importance=False,
               importance_type='model'):
-
     if importance_type not in ['model', 'drop_col']:
         raise ValueError('importance_type must be one of "model" or "drop_col"')
 
     independent_layers = ['X', 'Y', 'Z', 'POINT_FACING', 'WALL_POSITION', 'E-METL-T2',
                           'E-METL-T4', 'W-STON-HOLE', 'BOUNDBOX_C', 'BOUNDBOX_I', 'BOUNDBOX_O',
-                          'GRASS', 'SIDEWALK', 'TREE', 'C-HANG', 'C-HANG-1', 'C-HANG-2',
-                          'C-HANG-3', 'C-HANG-4', 'C-HANG-5', 'C-HANG-6', 'C-HANG-7']
+                          'IMPERVIOUS', 'PERVIOUS', 'TREE', 'C-HANG', 'C-HANG-1', 'C-HANG-2',
+                          'C-HANG-3', 'C-HANG-4', 'C-HANG-5', 'C-HANG-6', 'C-HANG-7',
+                          'ASHLAR', 'BEHIND_PILLAR', 'WINDOW', 'U-WL', 'U-UKN', 'CUTSTONE',
+                          'U-WL-DRAIN', 'U-WL-RFDRAIN', 'U-WL-RFDRAIN-OLD', 'U-SD']
 
     prohibited_layers = ['W-STON-DELAM', 'W-STON-STRAT-T1', 'E-METL-T3', 'W-STON-RESET-T4',
                          '0', '0-TIFF', 'A-ANNO-COLCTR', 'A-ANNO-COLNO', 'A-ANNO-CUTLINE', 'A-',
-                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG', 'W-STON-STRAT-T2']
+                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG', 'W-STON-STRAT-T2',
+                         'W-STON-STRAT-T1', 'W-SURF-STAIN-T1-JKS', 'W-SURF-GYP-JKS']
 
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
     walls = [r'2020-03-11 - et - DRAFT North Wall_BN.dxf',
@@ -585,11 +635,11 @@ def run_model(thresh=10,
     directions = {0: 'North', 1: 'East', 2: 'South', 3: 'West'}
     cad_files = [cad_path + walls[itup[0]] for itup in enumerate(walls)]
 
-    pkl_files = glob.glob(os.path.join(cad_path, 'dists_*.pkl'))
+    pkl_files = glob.glob(os.path.join(cad_path, 'pkl_parallel', 'dists_*.pkl'))
     all_df = [pd.read_pickle(pf) for pf in pkl_files]
     dist_df = all_df.pop()
     dist_df.columns = [x.upper() for x in dist_df.columns]
-    for df in all_df:
+    for df in tqdm(all_df, total=len(all_df)):
         df.columns = [x.upper() for x in df.columns]
         df.index += len(dist_df)
         dist_df = pd.merge(left=dist_df, right=df, how='outer')
@@ -634,15 +684,23 @@ def run_model(thresh=10,
             this_dim = dist_df[dim][wall_idx]
             dist_df[dim][wall_idx] -= this_dim.max()
 
+    # create a deep copy of the original dist_df for later
+    raw_dist_df = copy.deepcopy(dist_df)
+
+    # invert the distances
+    bottom_left = np.array([dist_df[dim].min() for dim in ['X', 'Y', 'Z']])
+    top_right = np.array([dist_df[dim].max() for dim in ['X', 'Y', 'Z']])
+    kernel_width = 0.05 * np.linalg.norm(top_right - bottom_left)
+    for col in dist_df.columns:
+        if col not in ['POINT_FACING', 'WALL_POSITION', 'X', 'X_ORIG', 'Y', 'Y_ORIG', 'Z', 'Z_ORIG']:
+            dist_df[col] = 1.0 - np.exp(-raw_dist_df[col] / kernel_width)
+
     if plot_correlation:
         fig = cross_corr(dist_df, prohibited_layers)
         fig.savefig(os.path.join(cad_path, 'whole_correlation.pdf'))
         plt.close(fig)
 
     if plot_ground_truth:
-        bottom_left = np.array([dist_df[dim].min() for dim in ['X', 'Y', 'Z']])
-        top_right = np.array([dist_df[dim].max() for dim in ['X', 'Y', 'Z']])
-        vmax = 0.05 * np.linalg.norm(top_right - bottom_left)
         for certain_layer in dist_df.columns:
             if certain_layer in ['X', 'Y', 'Z', 'POINT_FACING', 'WALL_POSITION'] + prohibited_layers:
                 continue
@@ -652,12 +710,15 @@ def run_model(thresh=10,
             Z = dist_df[certain_layer]
             #
             for w in range(4):
+                fig, ax = plt.subplots(1, 1, figsize=(10, 2.5))
                 w_idx = dist_df['WALL_POSITION'] == w
-                fig = plot_gt_2d(x_orig[w_idx], y_orig[w_idx], Z[w_idx],
+                plot_gt_2d(x_orig[w_idx], y_orig[w_idx], Z[w_idx],
                                  certain_layer, directions[w], bbox[w],
-                                 cmap='Blues_r', ms=1, lw=0.5, vmax=vmax)
-                fig_name = '%s_%s_Wall_GT.pdf' % (certain_layer, directions[w])
-                fig.savefig(os.path.join(cad_path, fig_name))
+                                 ax=ax,
+                                 cmap='Blues_r', ms=1, lw=0.5, vmin=0, vmax=1)
+                fig.tight_layout()
+                fig_name = '%s_%s_Wall_GT.png' % (certain_layer, directions[w])
+                fig.savefig(os.path.join(cad_path, fig_name), dpi=150)
                 plt.close(fig)
 
     predicted_layers = [l for l in layers if l not in independent_layers and l not in prohibited_layers]
@@ -669,11 +730,11 @@ def run_model(thresh=10,
 
         n_dist_mat = np.array([dist_df[k].values for k in new_layers])
 
-        rand_column = np.random.randint(2, size=n_dist_mat.shape[1])
+        rand_column = np.random.rand(n_dist_mat.shape[1])
         n_dist_mat = np.vstack([n_dist_mat, rand_column])
 
         X = n_dist_mat.transpose()
-        X[np.isinf(X)] = 1e12
+        # X[np.isinf(X)] = 1e12  # not needed when dists are exp
 
         if np.all(np.unique(dist_df[certain_layer].values) == np.array([0, 1])):
             y = dist_df[certain_layer].values
@@ -766,7 +827,7 @@ def run_model(thresh=10,
 
 
 def main():
-    compute_distances(cad_files, cad_path, num_samples=1000, num_batches=10)
+    compute_distances(cad_files, cad_path, num_samples=1000, num_batches=1)
     run_model(thresh=10,
               plot_correlation=True,
               plot_importance=True,
@@ -774,10 +835,12 @@ def main():
               calculate_importance=False,
               importance_type='model')
 
+
 # if __name__ == '__main__':
 #     main()
 
-def factor_analysis(df, numFactors=4, prohibited_layers=[]):
+def factor_analysis(dist_df, numFactors=5, prohibited_layers=[]):
+    df = copy.deepcopy(dist_df)
     # regular fa
     fa = FactorAnalyzer()
     #
@@ -795,11 +858,12 @@ def factor_analysis(df, numFactors=4, prohibited_layers=[]):
     factors = []
     for i, factor in enumerate(L.transpose()):
         descending = np.argsort(np.abs(factor))[::-1]
-        contributions = [(np.round(factor[x], 2), headings[x]) for x in descending if np.abs(factor[x]) > factor_threshold]
+        contributions = [(np.round(factor[x], 2), headings[x]) for x in descending if
+                         np.abs(factor[x]) > factor_threshold]
         factors.append(contributions)
         print('Factor %d:' % (i + 1), contributions)
 
-    inv = True
+    inv = False
     stacked_bars = False
     h = len(fa.loadings) / 5
     fig, ax = plt.subplots(1, 1, figsize=(6, h))
@@ -849,11 +913,11 @@ def factor_analysis(df, numFactors=4, prohibited_layers=[]):
             for w in range(4):
                 w_idx = df['WALL_POSITION'] == w
                 plot_gt_2d(x_orig[w_idx], y_orig[w_idx], Z[w_idx],
-                                 factor, directions[w], bbox[w],
-                                 cmap='RdBu_r', ms=1, lw=0.5, ax=ax[w],)
-                                 #vmin=-mag, vmax=mag)
-            fig_name = '%s.pdf' % factor
-            fig.savefig(os.path.join(cad_path, fig_name))
+                           factor, directions[w], bbox[w],
+                           cmap='RdBu_r', ms=1, lw=0.5, ax=ax[w], )
+                # vmin=-mag, vmax=mag)
+            fig_name = '%stotal_%s.png' % (numFactors, factor)
+            fig.savefig(os.path.join(cad_path, fig_name), dpi=150)
             plt.close(fig)
 
     factor_list = []
