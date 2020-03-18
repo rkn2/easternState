@@ -722,7 +722,7 @@ def run_model(thresh=10,
                 plt.close(fig)
 
     predicted_layers = [l for l in layers if l not in independent_layers and l not in prohibited_layers]
-    predicted_layers = predicted_layers[::-1]
+    # predicted_layers = predicted_layers[::-1]
     for certain_layer in tqdm(predicted_layers, total=len(predicted_layers)):
         # to get index of certain layer
         layer_order = sorted(dist_df.keys())
@@ -771,7 +771,7 @@ def run_model(thresh=10,
         # todo: confusion matrix for predictions
 
         importances_df = None
-        if calculate_importance:
+        if calculate_importance: #todo: this true type = model
             if importance_type == 'drop_col':  # with permutation importance
                 # figure out important features
                 # reduce data volume for faster evaluation
@@ -821,8 +821,8 @@ def run_model(thresh=10,
                 w_idx = dist_df['WALL_POSITION'] == w
                 fig = pred_locations_2d(x_orig[w_idx], y_orig[w_idx], y[w_idx], Z[w_idx],
                                         directions[w], certain_layer, bbox[w], cmap='RdBu_r', ms=1, lw=0.5)
-                fig_name = '%s_%s_Wall.pdf' % (certain_layer, directions[w])
-                fig.savefig(os.path.join(cad_path, fig_name))
+                fig_name = '%s_%s_Wall.png' % (certain_layer, directions[w])
+                fig.savefig(os.path.join(cad_path, fig_name), dpi=150)
                 plt.close(fig)
 
 
