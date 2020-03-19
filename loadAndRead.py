@@ -785,7 +785,7 @@ def run_model(thresh=0.1,
             print('working on %s' % certain_layer)
             if np.sum(y[train_mat]) == 0 or np.sum(y[train_mat] == 0) == 0:
                 print('skipping %s' % certain_layer)
-                continue
+                # continue
 
             # train the random forest
             rf = RandomForestClassifier(max_depth=16, random_state=42,
@@ -861,7 +861,7 @@ def run_model(thresh=0.1,
 
 def main():
     compute_distances(cad_files, cad_path, num_samples=1000, num_batches=1)
-    run_model(thresh=10,
+    run_model(thresh=0.10,
               plot_correlation=True,
               plot_importance=True,
               plot_wall=False,
@@ -1000,7 +1000,8 @@ def turtles_all_the_way_down(dist_df, bbox, cad_files, layers_of_interest=[]):
     y_orig = dist_df['Y_ORIG']
     #
     # fig, axes = plt.subplots(3, 3, figsize=(20, 10))
-    layers_of_interest = ['E-METL-T1', 'W-STON-MISS', 'W-STON-RESET-', 'C-', 'W-SURF-STAIN-']
+    # least to most; this one
+    layers_of_interest = ['E-VEGT-GROWIES','E-METL-T4','C-JOIN','C-REPR-','C-CRCK']
     n_layers = len(layers_of_interest)
     n_panels = 8
     n_grid = 2 * n_layers + n_panels
@@ -1044,4 +1045,4 @@ def turtles_all_the_way_down(dist_df, bbox, cad_files, layers_of_interest=[]):
     print('done!')
 
 
-turtles_all_the_way_down(dist_df, bbox, cad_path, layers_of_interest=[])
+# turtles_all_the_way_down(dist_df, bbox, cad_path, layers_of_interest=[])
