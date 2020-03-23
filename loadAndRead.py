@@ -504,21 +504,21 @@ def pred_locations_2d(x_orig, y_orig, y, Z,
     a.scatter(x_orig, y_orig, s=ms, c=Z, vmin=0, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
-    a.set_title('Predicted %s wall for %s' % (wall_name, certain_layer))
+    a.set_title('Predicted %s for %s wall' % (certain_layer, wall_name))
     a.set_aspect('equal')
     #
     a = ax[1]
     a.scatter(x_orig, y_orig, s=ms, c=y - Z, vmin=-1, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
-    a.set_title('Difference in %s wall for %s' % (wall_name, certain_layer))
+    a.set_title('Difference in %s for %s wall' % (certain_layer, wall_name))
     a.set_aspect('equal')
     # compare to ground truth
     a = ax[2]
     a.scatter(x_orig, y_orig, s=ms, c=y, vmin=0, vmax=1, cmap=cmap)
     for bb in bboxes:
         a.plot(bb[:, 0], bb[:, 1], 'k-', lw=lw)
-    a.set_title('Ground truth %s wall for %s' % (wall_name, certain_layer))
+    a.set_title('Ground truth %s for %s wall' % (certain_layer, wall_name))
     a.set_aspect('equal')
 
     return fig
@@ -620,11 +620,11 @@ def run_model(thresh=0.1,
                           'IMPERVIOUS', 'PERVIOUS', 'TREE', 'C-HANG', 'C-HANG-1', 'C-HANG-2',
                           'C-HANG-3', 'C-HANG-4', 'C-HANG-5', 'C-HANG-6', 'C-HANG-7',
                           'ASHLAR', 'BEHIND_PILLAR', 'WINDOW', 'U-WL', 'U-UKN', 'CUTSTONE',
-                          'U-WL-DRAIN', 'U-WL-RFDRAIN', 'U-WL-RFDRAIN-OLD', 'U-SD']
+                          'U-WL-DRAIN', 'U-WL-RFDRAIN', 'U-WL-RFDRAIN-OLD', 'U-SD','X_ORIG','Y_ORIG']
 
     prohibited_layers = ['W-STON-DELM-', 'W-STON-STRAT-T1', 'E-METL-T3', 'W-STON-RESET-T4',
                          'W-STON-DELAM', '0', '0-TIFF', 'A-ANNO-COLCTR', 'A-ANNO-COLNO', 'A-ANNO-CUTLINE', 'A-',
-                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG', 'W-STON-STRAT-T2',
+                         'A-ANNO-', 'DEFPOINTS', 'X_ORIG', 'Y_ORIG', 'W-STON-STRAT-T2', 'W-MRTR-FNSH-T2',
                          'W-STON-STRAT-T1', 'W-STON-STRAT-', 'W-SURF-STAIN-T1-JKS', 'W-SURF-GYP-JKS']
 
     cad_path = r"/Volumes/GoogleDrive/My Drive/Documents/Research/easternStatePenitentiary/2020_3_11/"
@@ -755,6 +755,7 @@ def run_model(thresh=0.1,
             plt.close(fig)
 
     predicted_layers = [l for l in dist_df.columns if l not in independent_layers and l not in prohibited_layers]
+    predicted_layers = [l for l in predicted_layers if l[-1] != '-']
     # predicted_layers = predicted_layers[::-1]
     for certain_layer in tqdm(predicted_layers, total=len(predicted_layers)):
         # to get index of certain layer
@@ -872,7 +873,7 @@ def main():
 # if __name__ == '__main__':
 #     main()
 
-def factor_analysis(dist_df, numFactors=5, prohibited_layers=[]):
+def factor_analysis(dist_df, numFactors=6, prohibited_layers=[]):
     df = copy.deepcopy(dist_df)
     # regular fa
     fa = FactorAnalyzer()
@@ -1001,25 +1002,17 @@ def turtles_all_the_way_down(dist_df, bbox, cad_files, layers_of_interest=[]):
     #
     # fig, axes = plt.subplots(3, 3, figsize=(20, 10))
     # least to most; this one
-    layers_of_interest = ['E-VEGT-GROWIES','E-METL-T4','C-JOIN','C-REPR-','C-CRCK']
+    layers_of_interest = ['IMPERVIOUS','W-SURF-GYP']
     n_layers = len(layers_of_interest)
     n_panels = 8
     n_grid = 2 * n_layers + n_panels
     # fig = plt.figure(constrained_layout=True)
     fig = plt.figure(figsize=(10, 10))
     gs = fig.add_gridspec(n_grid, n_grid)
-    fig.suptitle(', '.join(layers_of_interest))
-
-    # arr = np.zeros((n_grid, n_grid))
-    # for i in range(len(layers_of_interest)):
-    #     arr[i, n_layers:-n_layers] += 1,
-    #     arr[n_layers:-n_layers, -(i+1)] += 1
-    #     arr[-(i+1), n_layers:-n_layers] += 1
-    #     arr[n_layers:-n_layers, i] += 1
+    fig.suptitle(', '.join(layers_of_interest), fontsize=9)
 
     sub_frac = 1.00  # fraction to include in the sample
     rand_idx = np.random.random(len(dist_df)) < sub_frac
-
     for i, layer in enumerate(layers_of_interest):
         Z = dist_df[layer]
         faxes = [fig.add_subplot(gs[i, n_layers:-n_layers]),
@@ -1038,7 +1031,7 @@ def turtles_all_the_way_down(dist_df, bbox, cad_files, layers_of_interest=[]):
             ax.set_aspect('equal')
             ax.axis('off')
         print('drew layer %s (%d of %d)' % (layer, i + 1, n_layers))
-    fig_name = '%s_GT.png' % '_'.join(layers_of_interest)
+    fig_name = '%s_CC_GT.png' % '_'.join(layers_of_interest)
     print('rendering...', end='', flush=True)
     fig.savefig(os.path.join(cad_path, fig_name), dpi=150)
     plt.close(fig)
@@ -1046,3 +1039,24 @@ def turtles_all_the_way_down(dist_df, bbox, cad_files, layers_of_interest=[]):
 
 
 # turtles_all_the_way_down(dist_df, bbox, cad_path, layers_of_interest=[])
+
+# for analyzing correlations on specific layers
+def look_at_corr(dist_df, layer):
+    corr = dist_df.corr()
+    this_corr = corr[layer].values
+    for i in np.argsort(np.abs(this_corr))[::-1]:
+        if np.isnan(this_corr[i]) or np.isinf(this_corr[i]):
+            continue
+        print('%7f : %s' % (this_corr[i], dist_df.columns[i]))
+    #
+    # colormap = plt.cm.RdBu_r
+    # mask = np.ones_like(this_corr.reshape(-1, 1))
+    # mask[np.isnan(this_corr[i])] = False
+    # fig, ax = plt.subplots(1, 1, figsize=(4, max(4, len(dist_df.columns) / 5)))
+    # labels = dist_df.columns[]
+    # subax = sns.heatmap(this_corr.reshape(-1, 1), mask=mask, ax=ax,
+    #                     linewidths=0.1, vmin=-1.0, vmax=1.0,
+    #                     cmap=colormap, linecolor='white',
+    #                     annot=True, yticklabels=labels)
+    # fig.tight_layout()
+    #
